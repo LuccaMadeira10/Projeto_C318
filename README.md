@@ -1,5 +1,6 @@
 # Projeto_C318
 
+```
 projeto-c318-credito-consciente/
 │
 ├── data/
@@ -19,3 +20,4 @@ projeto-c318-credito-consciente/
 │   └── package.json
 │
 └── README.md                        # ENTREGÁVEL 2: Documentação 
+```
