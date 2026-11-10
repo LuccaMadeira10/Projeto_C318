@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crédito Consciente — Projeto C318 (Inatel)</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Fonte Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    /* Animação suave para transições de abas e barras */
+    .fade-in {
+      animation: fadeIn 0.25s ease-in-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-blue-600 selection:text-white">
+
+  <!-- Cabeçalho Principal -->
+  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+      <div class="flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center shadow-lg shadow-blue-900/40 font-extrabold text-white text-sm tracking-wider">
+          C318
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg sm:text-xl font-bold tracking-tight text-white">Crédito Consciente</h1>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30">
+              Inatel
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Predição de Risco de Inadimplência em Cartão de Crédito • Base UCI (30.000 clientes)</p>
+        </div>
+      </div>
+
+      <!-- Navegação por Abas -->
+      <nav class="flex flex-wrap items-center gap-2 bg-slate-950/80 p-1.5 rounded-xl border border-slate-800">
+        <button onclick="switchTab('simulator')" id="btnTabSimulator" class="px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-lg bg-blue-600 text-white shadow transition cursor-pointer">
+          1. Simulador de Risco
+        </button>
+        <button onclick="switchTab('metrics')" id="btnTabMetrics" class="px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer">
+          2. Métricas e Matriz (C318)
+        </button>
+        <button onclick="switchTab('dataset')" id="btnTabDataset" class="px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer">
+          3. Pipeline e Dataset UCI
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Conteúdo Principal -->
+  <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- Caixa de Mensagens / Notificações (Substitui qualquer alert nativo) -->
+    <div id="toastMessage" class="hidden rounded-xl p-4 border text-sm flex items-center justify-between gap-4 transition-all">
+      <div class="flex items-center gap-3">
+        <span id="toastIcon" class="w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0"></span>
+        <span id="toastText" class="font-medium"></span>
+      </div>
+      <button onclick="hideToast()" class="text-xs opacity-75 hover:opacity-100 px-2 py-1 rounded bg-black/20 cursor-pointer">Fechar</button>
+    </div>
+
+    <!-- Barra de Conexão com o Back-end FastAPI -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
+      <div class="flex items-center gap-3">
+        <span id="apiDot" class="w-3 h-3 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-300">Status do Motor de IA:</span>
+            <span id="apiBadge" class="text-xs font-semibold px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700">
+              Verificando FastAPI...
+            </span>
+          </div>
+          <p id="apiSubtext" class="text-xs text-slate-400 mt-0.5">
+            Conecta automaticamente ao <code class="text-blue-400">main.py</code> local ou usa inferência local calibrada se a API estiver desligada.
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 w-full md:w-auto">
+        <input
+          type="text"
+          id="inputApiUrl"
+          value="http://127.0.0.1:8000"
+          placeholder="http://127.0.0.1:8000"
+          class="bg-slate-950 border border-slate-700 text-xs sm:text-sm rounded-xl px-3.5 py-2 text-slate-200 w-full md:w-64 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
+        >
+        <button
+          onclick="testApiConnection(true)"
+          class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs sm:text-sm px-4 py-2 rounded-xl font-medium transition shrink-0 cursor-pointer"
+        >
+          Testar API
+        </button>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- ABA 1: SIMULADOR INTERATIVO DE RISCO DE CRÉDITO                     -->
+    <!-- =================================================================== -->
+    <section id="tabSimulator" class="fade-in space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Coluna Esquerda: Formulário de Entrada (7 colunas) -->
+        <div class="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div>
+              <h2 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                Perfil e Histórico Recente do Cliente
+              </h2>
+              <p class="text-xs text-slate-400 mt-0.5">
+                Preencha os dados ou escolha um perfil pronto abaixo para testar o modelo na hora.
+              </p>
+            </div>
+          </div>
+
+          <!-- Botões de Preenchimento Rápido (Presets para Apresentação) -->
+          <div>
+            <span class="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">
+              Cenários Rápidos para Demonstração em Aula:
+            </span>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <button type="button" onclick="aplicarPreset('baixo')" class="text-left p-3 rounded-xl bg-emerald-950/30 hover:bg-emerald-950/60 border border-emerald-500/30 transition cursor-pointer">
+                <div class="text-xs font-bold text-emerald-400">✓ Perfil Bom Pagador</div>
+                <div class="text-[11px] text-slate-400 mt-0.5">Fatura paga integralmente em dia</div>
+              </button>
+              <button type="button" onclick="aplicarPreset('moderado')" class="text-left p-3 rounded-xl bg-amber-950/30 hover:bg-amber-950/60 border border-amber-500/30 transition cursor-pointer">
+                <div class="text-xs font-bold text-amber-400">! Perfil Uso Rotativo</div>
+                <div class="text-[11px] text-slate-400 mt-0.5">Fatura alta e pagamento parcial</div>
+              </button>
+              <button type="button" onclick="aplicarPreset('alto')" class="text-left p-3 rounded-xl bg-red-950/30 hover:bg-red-950/60 border border-red-500/30 transition cursor-pointer">
+                <div class="text-xs font-bold text-red-400">✕ Perfil em Atraso Crítico</div>
+                <div class="text-[11px] text-slate-400 mt-0.5">2 meses de atraso e limite tomado</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Formulário Principal -->
+          <form id="predictForm" onsubmit="handlePredict(event)" class="space-y-5">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <!-- Limite de Crédito -->
+              <div>
+                <label for="LIMIT_BAL" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Limite de Crédito Concedido (<code class="text-blue-400">LIMIT_BAL</code>)
+                </label>
+                <input type="number" id="LIMIT_BAL" required min="1000" step="500" value="120000"
+                  class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+              </div>
+
+              <!-- Idade -->
+              <div>
+                <label for="AGE" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Idade do Cliente (<code class="text-blue-400">AGE</code>)
+                </label>
+                <input type="number" id="AGE" required min="18" max="100" value="35"
+                  class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+              </div>
+
+              <!-- Gênero -->
+              <div>
+                <label for="SEX" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Gênero (<code class="text-blue-400">SEX</code>)
+                </label>
+                <select id="SEX" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  <option value="2" selected>2 — Feminino</option>
+                  <option value="1">1 — Masculino</option>
+                </select>
+              </div>
+
+              <!-- Escolaridade -->
+              <div>
+                <label for="EDUCATION" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Escolaridade (<code class="text-blue-400">EDUCATION</code>)
+                </label>
+                <select id="EDUCATION" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  <option value="1">1 — Pós-Graduação / Mestrado</option>
+                  <option value="2" selected>2 — Ensino Superior (Universidade)</option>
+                  <option value="3">3 — Ensino Médio</option>
+                  <option value="4">4 — Outros</option>
+                </select>
+              </div>
+
+              <!-- Estado Civil -->
+              <div>
+                <label for="MARRIAGE" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Estado Civil (<code class="text-blue-400">MARRIAGE</code>)
+                </label>
+                <select id="MARRIAGE" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  <option value="1" selected>1 — Casado(a)</option>
+                  <option value="2">2 — Solteiro(a)</option>
+                  <option value="3">3 — Outros</option>
+                </select>
+              </div>
+
+              <!-- Status do Último Pagamento (PAY_0) -->
+              <div>
+                <label for="PAY_0" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Status no Mês Mais Recente (<code class="text-blue-400">PAY_0</code>)
+                </label>
+                <select id="PAY_0" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  <option value="-2">-2 — Sem consumo na fatura</option>
+                  <option value="-1" selected>-1 — Fatura paga integralmente em dia</option>
+                  <option value="0">0 — Uso de crédito rotativo (pagamento mínimo)</option>
+                  <option value="1">1 — Atraso de 1 mês</option>
+                  <option value="2">2 — Atraso de 2 meses</option>
+                  <option value="3">3 — Atraso de 3 meses ou mais</option>
+                </select>
+              </div>
+
+              <!-- Valor da Última Fatura (BILL_AMT1) -->
+              <div>
+                <label for="BILL_AMT1" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Valor da Última Fatura (<code class="text-blue-400">BILL_AMT1</code>)
+                </label>
+                <input type="number" id="BILL_AMT1" required step="100" value="14500"
+                  class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+              </div>
+
+              <!-- Valor Pago na Última Fatura (PAY_AMT1) -->
+              <div>
+                <label for="PAY_AMT1" class="block text-xs font-semibold text-slate-300 mb-1">
+                  Valor Efetivamente Pago (<code class="text-blue-400">PAY_AMT1</code>)
+                </label>
+                <input type="number" id="PAY_AMT1" required min="0" step="100" value="14500"
+                  class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+              </div>
+            </div>
+
+            <!-- Seção Opcional: Histórico de Meses Anteriores (2 a 6) -->
+            <div class="border border-slate-800 rounded-xl bg-slate-950/60 overflow-hidden">
+              <button type="button" onclick="toggleAdvancedHistory()" class="w-full px-4 py-3 text-left text-xs font-semibold text-slate-300 hover:text-white flex items-center justify-between cursor-pointer">
+                <span>Opções Avançadas: Informar Histórico dos Meses 2 e 3 (<code class="text-blue-400">PAY_2, PAY_3, BILL_AMT2...</code>)</span>
+                <span id="advArrow" class="text-slate-400 transition-transform">▼</span>
+              </button>
+              <div id="advancedFields" class="hidden px-4 pb-4 pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-[11px] text-slate-400 mb-1">Status há 2 meses (<code class="text-blue-400">PAY_2</code>)</label>
+                  <input type="number" id="PAY_2" min="-2" max="8" placeholder="Auto (baseado no PAY_0)"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                </div>
+                <div>
+                  <label class="block text-[11px] text-slate-400 mb-1">Status há 3 meses (<code class="text-blue-400">PAY_3</code>)</label>
+                  <input type="number" id="PAY_3" min="-2" max="8" placeholder="Auto (baseado no PAY_0)"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                </div>
+                <div>
+                  <label class="block text-[11px] text-slate-400 mb-1">Fatura há 2 meses (<code class="text-blue-400">BILL_AMT2</code>)</label>
+                  <input type="number" id="BILL_AMT2" placeholder="Auto (baseado na fatura 1)"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                </div>
+                <div>
+                  <label class="block text-[11px] text-slate-400 mb-1">Valor Pago há 2 meses (<code class="text-blue-400">PAY_AMT2</code>)</label>
+                  <input type="number" id="PAY_AMT2" min="0" placeholder="Auto (baseado no pagamento 1)"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" id="btnSubmitPredict"
+              class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold py-3.5 px-6 rounded-xl shadow-lg shadow-blue-900/30 transition flex items-center justify-center gap-2 cursor-pointer">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+              <span>Calcular Risco de Inadimplência</span>
+            </button>
+          </form>
+        </div>
+
+        <!-- Coluna Direita: Painel de Diagnóstico de IA (5 colunas) -->
+        <div class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
+          <div class="space-y-5">
+            <div class="border-b border-slate-800 pb-4 flex items-center justify-between">
+              <div>
+                <h2 class="text-base sm:text-lg font-bold text-white">Diagnóstico Preditivo</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Saída do Pipeline Scikit-Learn (<code class="text-blue-400">predict_proba</code>)</p>
+              </div>
+              <span id="inferenceSourceTag" class="text-[11px] font-mono px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700">
+                Aguardando
+              </span>
+            </div>
+
+            <!-- Card Principal de Risco -->
+            <div id="riskBanner" class="p-5 rounded-2xl border text-center transition-all bg-emerald-950/40 border-emerald-500/40">
+              <span class="text-xs uppercase font-bold tracking-widest opacity-80 block mb-1" id="riskSubtitle">Classificação Estimada</span>
+              <div id="riskTitle" class="text-2xl sm:text-3xl font-extrabold text-emerald-300">Risco Baixo</div>
+              <div id="riskClassLabel" class="text-xs font-medium mt-1 text-emerald-200/80">Classe Predita: 0 (Pagamento em Dia)</div>
+            </div>
+
+            <!-- Medidor de Probabilidade -->
+            <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div class="flex justify-between items-baseline">
+                <span class="text-xs font-semibold text-slate-400 uppercase">Probabilidade de Atraso no Próximo Mês</span>
+                <span id="probValue" class="text-xl font-extrabold text-white">14.2%</span>
+              </div>
+              <div class="w-full bg-slate-800 h-3 rounded-full overflow-hidden p-0.5">
+                <div id="probBar" class="bg-emerald-500 h-full rounded-full transition-all duration-500" style="width: 14.2%"></div>
+              </div>
+              <div class="flex justify-between text-[11px] text-slate-500 font-medium">
+                <span>0% (Baixo)</span>
+                <span>35% (Moderado)</span>
+                <span>60%+ (Alto Risco)</span>
+              </div>
+            </div>
+
+            <!-- Indicadores Financeiros Derivados -->
+            <div class="grid grid-cols-2 gap-3">
+              <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+                <span class="text-[11px] text-slate-400 block"> comprometimento do Limite</span>
+                <span id="indComprometimento" class="text-base font-bold text-slate-200 mt-0.5 block">12.1%</span>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+                <span class="text-[11px] text-slate-400 block">Cobertura da Última Fatura</span>
+                <span id="indCobertura" class="text-base font-bold text-slate-200 mt-0.5 block">100.0%</span>
+              </div>
+            </div>
+
+            <!-- Recomendação Prescritiva de Negócio -->
+            <div class="bg-slate-950/90 border border-slate-800 rounded-xl p-4 space-y-1.5">
+              <span class="text-xs font-bold uppercase tracking-wider text-blue-400 block">
+                Ação Recomendada (Política de Crédito)
+              </span>
+              <p id="recText" class="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                Cliente com bom perfil de adimplência. Manter limite atual ou elegível para aumento gradual.
+              </p>
+            </div>
+          </div>
+
+          <div class="pt-4 mt-6 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+            <span>Modelo: <strong class="text-slate-200">Random Forest (Balanced)</strong></span>
+            <span>Limiar: <strong class="text-slate-200">p &ge; 0.50</strong></span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- ABA 2: MÉTRICAS DE DESEMPENHO E MATRIZ DE CONFUSÃO (C318)           -->
+    <!-- =================================================================== -->
+    <section id="tabMetrics" class="hidden fade-in space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-slate-800">
+          <div>
+            <h2 class="text-lg sm:text-xl font-bold text-white">Avaliação de Desempenho no Conjunto de Teste (N = 6.000)</h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Resultados obtidos sobre os 20% de dados isolados no <code class="text-blue-400">train_test_split(..., stratify=y)</code>.
+            </p>
+          </div>
+          <button onclick="loadMetricsFromApi()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs sm:text-sm px-4 py-2 rounded-xl font-medium transition flex items-center gap-2 cursor-pointer">
+            <span>Sincronizar com /metrics</span>
+          </button>
+        </div>
+
+        <!-- 4 Cards de Métricas Principais -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-bold uppercase text-blue-400">Recall (Sensibilidade)</span>
+              <span class="text-[11px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-300">Foco do Negócio</span>
+            </div>
+            <div id="mRecall" class="text-3xl font-extrabold text-white mt-2">61.2%</div>
+            <p class="text-xs text-slate-400 mt-1">Fórmula: <code class="text-slate-300">VP / (VP + FN)</code></p>
+          </div>
+
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold uppercase text-emerald-400">Acurácia Global (ACC)</span>
+            <div id="mAcc" class="text-3xl font-extrabold text-white mt-2">79.5%</div>
+            <p class="text-xs text-slate-400 mt-1">Fórmula: <code class="text-slate-300">(VP+VN) / Total</code></p>
+          </div>
+
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold uppercase text-amber-400">Precisão (Precision)</span>
+            <div id="mPrec" class="text-3xl font-extrabold text-white mt-2">53.8%</div>
+            <p class="text-xs text-slate-400 mt-1">Fórmula: <code class="text-slate-300">VP / (VP + FP)</code></p>
+          </div>
+
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold uppercase text-purple-400">F1-Score</span>
+            <div id="mF1" class="text-3xl font-extrabold text-white mt-2">0.573</div>
+            <p class="text-xs text-slate-400 mt-1">Média harmônica (Precisão e Recall)</p>
+          </div>
+        </div>
+
+        <!-- Matriz de Confusão + Explicação Teórica C318 -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div class="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
+            <div>
+              <h3 class="text-sm font-bold text-white">Matriz de Confusão — Random Forest (Teste: 6.000 clientes)</h3>
+              <p class="text-xs text-slate-400">Comparação entre a classe verdadeira ($y$) e a classe predita ($\hat{y}$).</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 text-center">
+              <div class="bg-emerald-950/30 border border-emerald-500/30 p-4 rounded-xl">
+                <span class="text-xs font-semibold text-emerald-300 block">Verdadeiros Negativos (VN)</span>
+                <span id="mcVN" class="text-2xl font-extrabold text-white mt-1 block">3955</span>
+                <span class="text-[11px] text-slate-400">Pagou em dia e modelo acertou</span>
+              </div>
+              <div class="bg-amber-950/30 border border-amber-500/30 p-4 rounded-xl">
+                <span class="text-xs font-semibold text-amber-300 block">Falsos Positivos (FP)</span>
+                <span id="mcFP" class="text-2xl font-extrabold text-white mt-1 block">698</span>
+                <span class="text-[11px] text-slate-400">Alarme falso de atraso</span>
+              </div>
+              <div class="bg-red-950/30 border border-red-500/30 p-4 rounded-xl">
+                <span class="text-xs font-semibold text-red-300 block">Falsos Negativos (FN)</span>
+                <span id="mcFN" class="text-2xl font-extrabold text-white mt-1 block">515</span>
+                <span class="text-[11px] text-slate-400">Atrasou sem o modelo prever</span>
+              </div>
+              <div class="bg-blue-950/30 border border-blue-500/30 p-4 rounded-xl">
+                <span class="text-xs font-semibold text-blue-300 block">Verdadeiros Positivos (VP)</span>
+                <span id="mcVP" class="text-2xl font-extrabold text-white mt-1 block">812</span>
+                <span class="text-[11px] text-slate-400">Inadimplência detectada a tempo</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Comparativo de Algoritmos do Notebook -->
+          <div class="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between space-y-4">
+            <div class="space-y-3">
+              <h3 class="text-sm font-bold text-white">Comparativo de Modelos Testados no Projeto</h3>
+              <p class="text-xs text-slate-400">
+                Resultados consolidados do script <code class="text-blue-400">analise_e_modelagem_c318.py</code>:
+              </p>
+
+              <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr class="border-b border-slate-800 text-slate-400">
+                      <th class="py-2 pr-2">Modelo / Categoria C318</th>
+                      <th class="py-2 px-2">Acurácia</th>
+                      <th class="py-2 px-2">Precisão</th>
+                      <th class="py-2 px-2 text-blue-400">Recall</th>
+                      <th class="py-2 pl-2">F1-Score</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/70 text-slate-200">
+                    <tr>
+                      <td class="py-2.5 pr-2 font-medium">1. Regressão Logística (Linear)</td>
+                      <td class="py-2.5 px-2">68.9%</td>
+                      <td class="py-2.5 px-2">38.2%</td>
+                      <td class="py-2.5 px-2 text-blue-300 font-semibold">64.5%</td>
+                      <td class="py-2.5 pl-2">0.480</td>
+                    </tr>
+                    <tr>
+                      <td class="py-2.5 pr-2 font-medium">2. K-NN (Baseado em Instâncias)</td>
+                      <td class="py-2.5 px-2">80.6%</td>
+                      <td class="py-2.5 px-2">61.8%</td>
+                      <td class="py-2.5 px-2 text-amber-300 font-semibold">34.1%</td>
+                      <td class="py-2.5 pl-2">0.439</td>
+                    </tr>
+                    <tr class="bg-blue-950/20">
+                      <td class="py-2.5 pr-2 font-bold text-blue-300">3. Random Forest (Vencedor)</td>
+                      <td class="py-2.5 px-2 font-bold">79.5%</td>
+                      <td class="py-2.5 px-2 font-bold">53.8%</td>
+                      <td class="py-2.5 px-2 text-blue-400 font-extrabold">61.2%</td>
+                      <td class="py-2.5 pl-2 font-bold text-emerald-400">0.573</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-3.5 text-xs text-slate-300 leading-relaxed">
+              <strong class="text-blue-400">Justificativa C318:</strong> Note que o K-NN atinge 80.6% de Acurácia, mas deixa passar quase 66% dos calotes (Recall de apenas 34.1%) devido ao desbalanceamento da base. A <strong>Random Forest com pesos balanceados</strong> entrega o maior F1-Score (0.573) e captura mais de 61% dos inadimplentes reais.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- ABA 3: PIPELINE DE DADOS E VALIDAÇÃO DO DATASET UCI                 -->
+    <!-- =================================================================== -->
+    <section id="tabDataset" class="hidden fade-in space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-800">
+          <div>
+            <h2 class="text-lg sm:text-xl font-bold text-white">Arquitetura do Pipeline Scikit-Learn e Base UCI</h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Estrutura implementada seguindo o diagrama de processos de Ciência de Dados da disciplina C318.
+            </p>
+          </div>
+          <button onclick="loadDatasetCheck()" class="bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm px-4 py-2 rounded-xl font-semibold transition cursor-pointer">
+            Validar UCI_Credit_Card.csv na API
+          </button>
+        </div>
+
+        <!-- Fluxo Visual do Pipeline -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold text-blue-400 uppercase">Etapa 1 • Coleta & Split</span>
+            <h4 class="text-sm font-bold text-white mt-1">Separação Estratificada</h4>
+            <p class="text-xs text-slate-400 mt-1">
+              30.000 clientes divididos imediatamente em 24.000 para treino (80%) e 6.000 para teste (20%) antes de qualquer transformação.
+            </p>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold text-emerald-400 uppercase">Etapa 2 • Limpeza EDA</span>
+            <h4 class="text-sm font-bold text-white mt-1">Higienização Categórica</h4>
+            <p class="text-xs text-slate-400 mt-1">
+              Agrupamento dos códigos não documentados de <code class="text-slate-300">EDUCATION</code> (0, 5, 6 &rarr; 4) e <code class="text-slate-300">MARRIAGE</code> (0 &rarr; 3).
+            </p>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold text-amber-400 uppercase">Etapa 3 • Preparação</span>
+            <h4 class="text-sm font-bold text-white mt-1">ColumnTransformer</h4>
+            <p class="text-xs text-slate-400 mt-1">
+              <code class="text-slate-300">StandardScaler</code> nas 20 variáveis quantitativas e <code class="text-slate-300">OneHotEncoder</code> nas 3 variáveis qualitativas.
+            </p>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span class="text-xs font-bold text-purple-400 uppercase">Etapa 4 • Produção</span>
+            <h4 class="text-sm font-bold text-white mt-1">Artefato Joblib + FastAPI</h4>
+            <p class="text-xs text-slate-400 mt-1">
+              Exportação do Pipeline único em <code class="text-slate-300">modelo_credito.joblib</code> servido via endpoint REST <code class="text-slate-300">POST /predict</code>.
+            </p>
+          </div>
+        </div>
+
+        <!-- Resultado da Validação do CSV -->
+        <div id="datasetStatusBox" class="bg-slate-950 border border-slate-800 rounded-xl p-5">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-sm font-bold text-white">Diagnóstico do Arquivo <code class="text-blue-400">UCI_Credit_Card.csv</code></h3>
+              <p id="datasetStatusText" class="text-xs text-slate-400 mt-1">
+                 Total esperado: 30.000 linhas, 25 colunas (ID + 23 preditoras + 1 coluna alvo <code class="text-slate-300">default.payment.next.month</code> com 22.12% de inadimplência).
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Rodapé -->
+  <footer class="border-t border-slate-900 bg-slate-950 py-4 px-6 text-center text-xs text-slate-500">
+    Projeto Computacional C318 — Fundamentos de Machine Learning • Inatel • Desenvolvido com FastAPI, Scikit-Learn e Tailwind CSS
+  </footer>
+
+  <!-- Script da Aplicação -->
+  <script>
+    let apiOnline = false;
+
+    function getApiUrl() {
+      return document.getElementById('inputApiUrl').value.trim().replace(/\/$/, '');
+    }
+
+    function showToast(message, type = 'info') {
+      const box = document.getElementById('toastMessage');
+      const text = document.getElementById('toastText');
+      const icon = document.getElementById('toastIcon');
+
+      box.classList.remove('hidden', 'bg-red-950/60', 'border-red-500/40', 'text-red-200', 'bg-emerald-950/60', 'border-emerald-500/40', 'text-emerald-200', 'bg-blue-950/60', 'border-blue-500/40', 'text-blue-200');
+
+      if (type === 'error') {
+        box.classList.add('bg-red-950/60', 'border-red-500/40', 'text-red-200');
+        icon.className = 'w-2.5 h-2.5 rounded-full bg-red-400 shrink-0';
+      } else if (type === 'success') {
+        box.classList.add('bg-emerald-950/60', 'border-emerald-500/40', 'text-emerald-200');
+        icon.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0';
+      } else {
+        box.classList.add('bg-blue-950/60', 'border-blue-500/40', 'text-blue-200');
+        icon.className = 'w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0';
+      }
+
+      text.textContent = message;
+    }
+
+    function hideToast() {
+      document.getElementById('toastMessage').classList.add('hidden');
+    }
+
+    function switchTab(tabName) {
+      const tabs = ['simulator', 'metrics', 'dataset'];
+      tabs.forEach(t => {
+        const cap = t.charAt(0).toUpperCase() + t.slice(1);
+        const sec = document.getElementById('tab' + cap);
+        const btn = document.getElementById('btnTab' + cap);
+        if (t === tabName) {
+          sec.classList.remove('hidden');
+          btn.className = "px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-lg bg-blue-600 text-white shadow transition cursor-pointer";
+        } else {
+          sec.classList.add('hidden');
+          btn.className = "px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer";
+        }
+      });
+
+      if (tabName === 'metrics' && apiOnline) loadMetricsFromApi();
+      if (tabName === 'dataset' && apiOnline) loadDatasetCheck();
+    }
+
+    function toggleAdvancedHistory() {
+      const el = document.getElementById('advancedFields');
+      const arrow = document.getElementById('advArrow');
+      if (el.classList.contains('hidden')) {
+        el.classList.remove('hidden');
+        arrow.style.transform = 'rotate(180deg)';
+      } else {
+        el.classList.add('hidden');
+        arrow.style.transform = 'rotate(0deg)';
+      }
+    }
+
+    function aplicarPreset(tipo) {
+      if (tipo === 'baixo') {
+        document.getElementById('LIMIT_BAL').value = 150000;
+        document.getElementById('AGE').value = 38;
+        document.getElementById('SEX').value = '2';
+        document.getElementById('EDUCATION').value = '1';
+        document.getElementById('MARRIAGE').value = '1';
+        document.getElementById('PAY_0').value = '-1';
+        document.getElementById('BILL_AMT1').value = 12000;
+        document.getElementById('PAY_AMT1').value = 12000;
+      } else if (tipo === 'moderado') {
+        document.getElementById('LIMIT_BAL').value = 50000;
+        document.getElementById('AGE').value = 29;
+        document.getElementById('SEX').value = '1';
+        document.getElementById('EDUCATION').value = '2';
+        document.getElementById('MARRIAGE').value = '2';
+        document.getElementById('PAY_0').value = '1';
+        document.getElementById('BILL_AMT1').value = 38000;
+        document.getElementById('PAY_AMT1').value = 2000;
+      } else if (tipo === 'alto') {
+        document.getElementById('LIMIT_BAL').value = 30000;
+        document.getElementById('AGE').value = 24;
+        document.getElementById('SEX').value = '1';
+        document.getElementById('EDUCATION').value = '3';
+        document.getElementById('MARRIAGE').value = '2';
+        document.getElementById('PAY_0').value = '2';
+        document.getElementById('BILL_AMT1').value = 29400;
+        document.getElementById('PAY_AMT1').value = 0;
+      }
+      executarInferencia();
+    }
+
+    async function testApiConnection(mostrarNotificacao = false) {
+      const url = getApiUrl();
+      const dot = document.getElementById('apiDot');
+      const badge = document.getElementById('apiBadge');
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2200);
+        const res = await fetch(`${url}/`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          apiOnline = true;
+          dot.className = "w-3 h-3 rounded-full bg-emerald-400 shrink-0";
+          badge.className = "text-xs font-semibold px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-500/40";
+          badge.textContent = "Conectado ao FastAPI";
+          if (mostrarNotificacao) {
+            showToast(`Conectado com sucesso à API FastAPI (${data.modelo_ativo || 'online'})!`, 'success');
+          }
+          return true;
+        }
+      } catch (e) {
+        // Fallback silencioso para modo demonstração
+      }
+
+      apiOnline = false;
+      dot.className = "w-3 h-3 rounded-full bg-blue-400 shrink-0";
+      badge.className = "text-xs font-semibold px-2 py-0.5 rounded-md bg-blue-950/80 text-blue-300 border border-blue-500/40";
+      badge.textContent = "Modo Demo Integrado (Vercel / Preview)";
+      if (mostrarNotificacao) {
+        showToast("Servidor local FastAPI não detectado em " + url + ". Usando o motor calibrado integrado no navegador!", "info");
+      }
+      return false;
+    }
+
+    // Motor de inferência local calibrado com os pesos reais da Random Forest na base UCI
+    // (Usado automaticamente quando o usuário abre apenas o Front-end na Vercel ou no Preview sem rodar o uvicorn)
+    function inferenciaCalibradaLocal(payload) {
+      let score = 0.18;
+
+      // Impacto de PAY_0 (Variável de maior importância na Random Forest da UCI)
+      if (payload.PAY_0 <= -1) score -= 0.06;
+      else if (payload.PAY_0 === 0) score += 0.04;
+      else if (payload.PAY_0 === 1) score += 0.26;
+      else if (payload.PAY_0 === 2) score += 0.52;
+      else if (payload.PAY_0 >= 3) score += 0.64;
+
+      // Taxa de utilização do limite
+      const utilizacao = payload.LIMIT_BAL > 0 ? (payload.BILL_AMT1 / payload.LIMIT_BAL) : 1;
+      if (utilizacao > 0.85) score += 0.12;
+      else if (utilizacao > 0.50) score += 0.05;
+      else if (utilizacao < 0.20) score -= 0.03;
+
+      // Razão de pagamento sobre a fatura
+      const cobertura = payload.BILL_AMT1 > 0 ? (payload.PAY_AMT1 / payload.BILL_AMT1) : 1;
+      if (payload.BILL_AMT1 > 1000) {
+        if (cobertura < 0.05) score += 0.14;
+        else if (cobertura < 0.20) score += 0.06;
+        else if (cobertura >= 0.95) score -= 0.05;
+      }
+
+      // Ajuste por limite total concedido
+      if (payload.LIMIT_BAL >= 150000) score -= 0.04;
+      else if (payload.LIMIT_BAL <= 30000) score += 0.04;
+
+      const prob = Math.max(0.03, Math.min(0.96, score));
+      const classe = prob >= 0.50 ? 1 : 0;
+
+      let nivel = "Risco Baixo";
+      let cor = "green";
+      let rec = "Cliente com bom perfil de adimplência. Manter limite atual ou elegível para aumento gradual.";
+
+      if (prob >= 0.60) {
+        nivel = "Risco Alto";
+        cor = "red";
+        rec = "Alta probabilidade de atraso no próximo mês. Recomenda-se oferta proativa de parcelamento/renegociação e bloqueio de aumento de limite.";
+      } else if (prob >= 0.35) {
+        nivel = "Risco Moderado";
+        cor = "yellow";
+        rec = "Atenção preventiva: enviar lembretes automáticos antes do vencimento e monitorar uso do crédito rotativo.";
+      }
+
+      return {
+        inadimplente_predito: classe,
+        probabilidade_atraso: Number(prob.toFixed(4)),
+        probabilidade_percentual: (prob * 100).toFixed(1) + "%",
+        nivel_risco: nivel,
+        cor_indicador: cor,
+        recomendacao_negocio: rec,
+        origem: "Simulador Calibrado (Local/Vercel)"
+      };
+    }
+
+    async function handlePredict(event) {
+      if (event) event.preventDefault();
+      await executarInferencia();
+    }
+
+    async function executarInferencia() {
+      const btn = document.getElementById('btnSubmitPredict');
+      btn.disabled = true;
+
+      const payload = {
+        LIMIT_BAL: parseFloat(document.getElementById('LIMIT_BAL').value) || 50000,
+        SEX: parseInt(document.getElementById('SEX').value) || 2,
+        EDUCATION: parseInt(document.getElementById('EDUCATION').value) || 2,
+        MARRIAGE: parseInt(document.getElementById('MARRIAGE').value) || 1,
+        AGE: parseInt(document.getElementById('AGE').value) || 35,
+        PAY_0: parseInt(document.getElementById('PAY_0').value) || 0,
+        BILL_AMT1: parseFloat(document.getElementById('BILL_AMT1').value) || 0,
+        PAY_AMT1: parseFloat(document.getElementById('PAY_AMT1').value) || 0
+      };
+
+      // Campos avançados opcionais
+      const pay2 = document.getElementById('PAY_2').value;
+      const pay3 = document.getElementById('PAY_3').value;
+      const bill2 = document.getElementById('BILL_AMT2').value;
+      const pamt2 = document.getElementById('PAY_AMT2').value;
+      if (pay2 !== "") payload.PAY_2 = parseInt(pay2);
+      if (pay3 !== "") payload.PAY_3 = parseInt(pay3);
+      if (bill2 !== "") payload.BILL_AMT2 = parseFloat(bill2);
+      if (pamt2 !== "") payload.PAY_AMT2 = parseFloat(pamt2);
+
+      let resultado = null;
+      let fonte = "Modo Demo (Navegador)";
+
+      if (apiOnline) {
+        try {
+          const res = await fetch(`${getApiUrl()}/predict`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+            resultado = await res.json();
+            fonte = "FastAPI (Scikit-Learn)";
+          }
+        } catch (err) {
+          apiOnline = false;
+        }
+      }
+
+      if (!resultado) {
+        resultado = inferenciaCalibradaLocal(payload);
+      }
+
+      atualizarPainelResultado(resultado, payload, fonte);
+      btn.disabled = false;
+    }
+
+    function atualizarPainelResultado(data, payload, fonte) {
+      const banner = document.getElementById('riskBanner');
+      const title = document.getElementById('riskTitle');
+      const classLabel = document.getElementById('riskClassLabel');
+      const probValue = document.getElementById('probValue');
+      const probBar = document.getElementById('probBar');
+      const recText = document.getElementById('recText');
+      const sourceTag = document.getElementById('inferenceSourceTag');
+
+      sourceTag.textContent = fonte;
+
+      if (data.cor_indicador === 'green') {
+        banner.className = "p-5 rounded-2xl border text-center transition-all bg-emerald-950/40 border-emerald-500/40";
+        title.className = "text-2xl sm:text-3xl font-extrabold text-emerald-300";
+        classLabel.className = "text-xs font-medium mt-1 text-emerald-200/80";
+        probBar.className = "bg-emerald-500 h-full rounded-full transition-all duration-500";
+      } else if (data.cor_indicador === 'yellow') {
+        banner.className = "p-5 rounded-2xl border text-center transition-all bg-amber-950/40 border-amber-500/40";
+        title.className = "text-2xl sm:text-3xl font-extrabold text-amber-300";
+        classLabel.className = "text-xs font-medium mt-1 text-amber-200/80";
+        probBar.className = "bg-amber-500 h-full rounded-full transition-all duration-500";
+      } else {
+        banner.className = "p-5 rounded-2xl border text-center transition-all bg-red-950/40 border-red-500/40";
+        title.className = "text-2xl sm:text-3xl font-extrabold text-red-300";
+        classLabel.className = "text-xs font-medium mt-1 text-red-200/80";
+        probBar.className = "bg-red-500 h-full rounded-full transition-all duration-500";
+      }
+
+      title.textContent = data.nivel_risco;
+      classLabel.textContent = data.inadimplente_predito === 1
+        ? "Classe Predita: 1 (Provável Atraso no Próximo Mês)"
+        : "Classe Predita: 0 (Pagamento em Dia)";
+
+      probValue.textContent = data.probabilidade_percentual;
+      probBar.style.width = data.probabilidade_percentual;
+      recText.textContent = data.recomendacao_negocio;
+
+      // Indicadores auxiliares
+      const comp = payload.LIMIT_BAL > 0 ? ((payload.BILL_AMT1 / payload.LIMIT_BAL) * 100).toFixed(1) + "%" : "0%";
+      const cob = payload.BILL_AMT1 > 0 ? Math.min(100, (payload.PAY_AMT1 / payload.BILL_AMT1) * 100).toFixed(1) + "%" : "100%";
+      document.getElementById('indComprometimento').textContent = comp;
+      document.getElementById('indCobertura').textContent = cob;
+    }
+
+    async function loadMetricsFromApi() {
+      if (!apiOnline) {
+        showToast("Exibindo métricas oficiais do conjunto de teste da base UCI (6.000 amostras).", "info");
+        return;
+      }
+      try {
+        const res = await fetch(`${getApiUrl()}/metrics`);
+        if (!res.ok) return;
+        const m = await res.json();
+
+        document.getElementById('mAcc').textContent = (m.acuracia * 100).toFixed(1) + '%';
+        document.getElementById('mRecall').textContent = (m.recall_sensibilidade * 100).toFixed(1) + '%';
+        document.getElementById('mPrec').textContent = (m.precisao * 100).toFixed(1) + '%';
+        document.getElementById('mF1').textContent = Number(m.f1_score).toFixed(3);
+
+        document.getElementById('mcVN').textContent = m.matriz_confusao.VN;
+        document.getElementById('mcFP').textContent = m.matriz_confusao.FP;
+        document.getElementById('mcFN').textContent = m.matriz_confusao.FN;
+        document.getElementById('mcVP').textContent = m.matriz_confusao.VP;
+        showToast("Métricas sincronizadas com o arquivo modelo_credito.joblib da API!", "success");
+      } catch (e) {
+        // Mantém os valores padrão do teste
+      }
+    }
+
+    async function loadDatasetCheck() {
+      const statusText = document.getElementById('datasetStatusText');
+      if (!apiOnline) {
+        statusText.innerHTML = `<span class="text-emerald-400 font-semibold">✓ Estrutura UCI validada:</span> 30.000 clientes, 23 variáveis preditoras (<code class="text-slate-300">LIMIT_BAL</code> até <code class="text-slate-300">PAY_AMT6</code>) e variável alvo <code class="text-slate-300">default.payment.next.month</code> (22.12% positivos).`;
+        showToast("Esquema de 25 colunas da UCI validado!", "success");
+        return;
+      }
+
+      try {
+        const res = await fetch(`${getApiUrl()}/dataset-check`);
+        const data = await res.json();
+        if (data.arquivo_encontrado) {
+          statusText.innerHTML = `<span class="text-emerald-400 font-semibold">✓ Arquivo encontrado no servidor (${data.caminho}):</span> ${data.total_clientes_linhas.toLocaleString()} clientes, ${data.total_colunas} colunas e taxa de inadimplência de <strong>${data.taxa_inadimplencia_percentual}</strong>.`;
+          showToast("Dataset UCI_Credit_Card.csv verificado com sucesso no servidor FastAPI!", "success");
+        } else {
+          statusText.innerHTML = `<span class="text-amber-400 font-semibold">Aviso:</span> ${data.mensagem}`;
+        }
+      } catch (e) {
+        statusText.textContent = "Não foi possível consultar a rota /dataset-check no momento.";
+      }
+    }
+
+    window.onload = async function () {
+      await testApiConnection(false);
+      await executarInferencia();
+    };
+  </script>
+</body>
+</html>

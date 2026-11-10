@@ -79,22 +79,23 @@ app = FastAPI(
         "API REST para predição de risco de inadimplência em cartão de crédito "
         "utilizando a base UCI Credit Card Default e Pipeline do Scikit-Learn."
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 
 # Configuração de CORS essencial para permitir que o Front-end na Vercel consuma a API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção na Vercel, você pode colocar ["https://seu-app.vercel.app"]
+    allow_origins=["*"],  # Em produção na Vercel, você pode restringir ao domínio do seu app
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 class ClienteCreditoInput(BaseModel):
     """
     Esquema de entrada de dados do cliente.
-    Os campos dos meses anteriores (2 a 6) possuem valores padrão (0) para que
+    Os campos dos meses anteriores (2 a 6) possuem valores padrão (None) para que
     o formulário do Front-end na Vercel possa ser simples (pedindo apenas os dados
     principais) ou completo (enviando os 6 meses).
     """
@@ -142,11 +143,11 @@ class ClienteCreditoInput(BaseModel):
         description="Status do pagamento no último mês (Setembro): -1=Em dia, 0=Rotativo, 1=1 mês de atraso, 2=2 meses...",
         examples=[2],
     )
-    PAY_2: int = Field(0, ge=-2, le=9, description="Status do pagamento há 2 meses")
-    PAY_3: int = Field(0, ge=-2, le=9, description="Status do pagamento há 3 meses")
-    PAY_4: int = Field(0, ge=-2, le=9, description="Status do pagamento há 4 meses")
-    PAY_5: int = Field(0, ge=-2, le=9, description="Status do pagamento há 5 meses")
-    PAY_6: int = Field(0, ge=-2, le=9, description="Status do pagamento há 6 meses")
+    PAY_2: Optional[int] = Field(None, ge=-2, le=9, description="Status do pagamento há 2 meses")
+    PAY_3: Optional[int] = Field(None, ge=-2, le=9, description="Status do pagamento há 3 meses")
+    PAY_4: Optional[int] = Field(None, ge=-2, le=9, description="Status do pagamento há 4 meses")
+    PAY_5: Optional[int] = Field(None, ge=-2, le=9, description="Status do pagamento há 5 meses")
+    PAY_6: Optional[int] = Field(None, ge=-2, le=9, description="Status do pagamento há 6 meses")
 
     # Valores das faturas (BILL_AMT1 é a fatura mais recente)
     BILL_AMT1: float = Field(
@@ -154,11 +155,11 @@ class ClienteCreditoInput(BaseModel):
         description="Valor da fatura mais recente",
         examples=[42000.0],
     )
-    BILL_AMT2: float = Field(0.0, description="Valor da fatura há 2 meses")
-    BILL_AMT3: float = Field(0.0, description="Valor da fatura há 3 meses")
-    BILL_AMT4: float = Field(0.0, description="Valor da fatura há 4 meses")
-    BILL_AMT5: float = Field(0.0, description="Valor da fatura há 5 meses")
-    BILL_AMT6: float = Field(0.0, description="Valor da fatura há 6 meses")
+    BILL_AMT2: Optional[float] = Field(None, description="Valor da fatura há 2 meses")
+    BILL_AMT3: Optional[float] = Field(None, description="Valor da fatura há 3 meses")
+    BILL_AMT4: Optional[float] = Field(None, description="Valor da fatura há 4 meses")
+    BILL_AMT5: Optional[float] = Field(None, description="Valor da fatura há 5 meses")
+    BILL_AMT6: Optional[float] = Field(None, description="Valor da fatura há 6 meses")
 
     # Valores efetivamente pagos (PAY_AMT1 é o pagamento mais recente)
     PAY_AMT1: float = Field(
@@ -167,11 +168,11 @@ class ClienteCreditoInput(BaseModel):
         description="Valor pago na fatura mais recente",
         examples=[1500.0],
     )
-    PAY_AMT2: float = Field(0.0, ge=0, description="Valor pago há 2 meses")
-    PAY_AMT3: float = Field(0.0, ge=0, description="Valor pago há 3 meses")
-    PAY_AMT4: float = Field(0.0, ge=0, description="Valor pago há 4 meses")
-    PAY_AMT5: float = Field(0.0, ge=0, description="Valor pago há 5 meses")
-    PAY_AMT6: float = Field(0.0, ge=0, description="Valor pago há 6 meses")
+    PAY_AMT2: Optional[float] = Field(None, ge=0, description="Valor pago há 2 meses")
+    PAY_AMT3: Optional[float] = Field(None, ge=0, description="Valor pago há 3 meses")
+    PAY_AMT4: Optional[float] = Field(None, ge=0, description="Valor pago há 4 meses")
+    PAY_AMT5: Optional[float] = Field(None, ge=0, description="Valor pago há 5 meses")
+    PAY_AMT6: Optional[float] = Field(None, ge=0, description="Valor pago há 6 meses")
 
 
 class PredicaoOutput(BaseModel):
@@ -268,17 +269,24 @@ def construir_pipeline_sklearn() -> Pipeline:
 
 def inicializar_modelo() -> None:
     """
-    1. Tenta carregar 'modelo_credito.joblib' se já tiver sido gerado no Notebook.
+    1. Tenta carregar 'modelo_credito.joblib' (que guarda tanto o pipeline quanto as métricas reais).
     2. Caso não exista, verifica se 'UCI_Credit_Card.csv' está na pasta, faz o
        train_test_split estratificado (regra de ouro da C318!), treina o Pipeline
-       e já salva o arquivo 'modelo_credito.joblib'.
+       e já salva o arquivo 'modelo_credito.joblib' com as métricas reais do teste.
     3. Caso nenhum dos dois esteja presente ainda, treina um modelo de demonstração
        sintético para que a API nunca quebre durante os testes de Front-end.
     """
     if os.path.exists(MODEL_PATH):
         try:
-            STATE["pipeline"] = joblib.load(MODEL_PATH)
-            STATE["origem"] = f"Carregado do arquivo {MODEL_PATH}"
+            artefato = joblib.load(MODEL_PATH)
+            # Suporta tanto um dicionário completo (pipeline + métricas) quanto apenas o Pipeline puro
+            if isinstance(artefato, dict) and "pipeline" in artefato:
+                STATE["pipeline"] = artefato["pipeline"]
+                STATE["metricas"] = artefato.get("metricas", STATE["metricas"])
+                STATE["origem"] = f"Carregado do artefato salvo ({MODEL_PATH})"
+            else:
+                STATE["pipeline"] = artefato
+                STATE["origem"] = f"Carregado do arquivo ({MODEL_PATH})"
             return
         except Exception as exc:
             print(f"[Aviso] Falha ao carregar {MODEL_PATH}: {exc}")
@@ -286,6 +294,7 @@ def inicializar_modelo() -> None:
     csv_path = localizar_csv()
     if csv_path:
         try:
+            print(f"[C318] Lendo base de dados '{csv_path}' e treinando Pipeline Scikit-Learn...")
             df = pd.read_csv(csv_path)
             df = limpar_categorias_uci(df)
 
@@ -304,9 +313,7 @@ def inicializar_modelo() -> None:
             y_pred = pipeline.predict(X_test)
             tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
 
-            STATE["pipeline"] = pipeline
-            STATE["origem"] = f"Treinado automaticamente a partir de {csv_path}"
-            STATE["metricas"] = {
+            metricas_calculadas = {
                 "algoritmo": "RandomForestClassifier (Pipeline Scikit-Learn)",
                 "total_amostras_teste": int(len(y_test)),
                 "acuracia": round(float(accuracy_score(y_test, y_pred)), 4),
@@ -321,8 +328,19 @@ def inicializar_modelo() -> None:
                 },
             }
 
-            # Salva o modelo para que as próximas inicializações sejam instantâneas
-            joblib.dump(pipeline, MODEL_PATH)
+            STATE["pipeline"] = pipeline
+            STATE["origem"] = f"Treinado a partir da base oficial ({csv_path})"
+            STATE["metricas"] = metricas_calculadas
+
+            # Salva o pipeline junto com as métricas reais de teste para carregamentos futuros
+            joblib.dump(
+                {
+                    "pipeline": pipeline,
+                    "metricas": metricas_calculadas,
+                },
+                MODEL_PATH,
+            )
+            print(f"[C318] Modelo treinado e salvo com sucesso em '{MODEL_PATH}'!")
             return
         except Exception as exc:
             print(f"[Aviso] Erro ao treinar a partir do CSV: {exc}")
@@ -357,13 +375,12 @@ def inicializar_modelo() -> None:
             "PAY_AMT6": rng.uniform(0, 20000, n_sintetico),
         }
     )
-    # Regra sintética realista: atraso recente (PAY_0 >= 2) e baixo pagamento aumentam chance de calote
     y_sint = ((df_sint["PAY_0"] >= 1) & (df_sint["PAY_AMT1"] < df_sint["BILL_AMT1"] * 0.15)).astype(int)
 
     pipeline_fallback = construir_pipeline_sklearn()
     pipeline_fallback.fit(df_sint, y_sint)
     STATE["pipeline"] = pipeline_fallback
-    STATE["origem"] = "Modelo de contingência (adicione modelo_credito.joblib ou UCI_Credit_Card.csv)"
+    STATE["origem"] = "Modelo de contingência (adicione UCI_Credit_Card.csv na pasta para treinar o real)"
 
 
 # Inicializa o modelo ao subir o servidor
@@ -423,7 +440,7 @@ def verificar_dataset_uci():
 @app.post("/predict", response_model=PredicaoOutput, tags=["Inferência de ML"])
 def prever_risco_credito(cliente: ClienteCreditoInput):
     """
-    Recebe os dados de um cliente do Front-end (Vercel), preenche automaticamento
+    Recebe os dados de um cliente do Front-end (Vercel), preenche automaticamente
     o histórico caso o usuário envie apenas o mês mais recente, executa o Pipeline
     do Scikit-Learn e retorna a classe predita (0 ou 1) e a probabilidade de atraso.
     """
@@ -432,13 +449,15 @@ def prever_risco_credito(cliente: ClienteCreditoInput):
 
     dados_dict = cliente.model_dump()
 
-    # Se o formulário do Front-end enviar apenas a fatura atual (BILL_AMT1) e deixar as
-    # anteriores zeradas, propagamos uma estimativa proporcional para não distorcer o Scaler
-    if dados_dict["BILL_AMT2"] == 0 and dados_dict["BILL_AMT1"] > 0:
-        for i in range(2, 7):
+    # Preenche de forma inteligente os meses 2 a 6 caso o Front-end envie apenas o resumo do mês 1
+    status_base_antigo = 0 if dados_dict["PAY_0"] <= 0 else max(0, dados_dict["PAY_0"] - 1)
+    for i in range(2, 7):
+        if dados_dict[f"PAY_{i}"] is None:
+            dados_dict[f"PAY_{i}"] = status_base_antigo if i <= 3 else 0
+        if dados_dict[f"BILL_AMT{i}"] is None:
             dados_dict[f"BILL_AMT{i}"] = dados_dict["BILL_AMT1"]
-            if dados_dict[f"PAY_AMT{i}"] == 0:
-                dados_dict[f"PAY_AMT{i}"] = dados_dict["PAY_AMT1"]
+        if dados_dict[f"PAY_AMT{i}"] is None:
+            dados_dict[f"PAY_AMT{i}"] = dados_dict["PAY_AMT1"]
 
     # Monta o DataFrame na ordem exata de colunas exigida pelo Pipeline do Scikit-Learn
     df_input = pd.DataFrame([dados_dict])[FEATURE_COLUMNS]
@@ -453,7 +472,7 @@ def prever_risco_credito(cliente: ClienteCreditoInput):
         )
 
     # Regra de negócio para classificação visual no painel do Front-end
-    if prob_calote < 0.30:
+    if prob_calote < 0.35:
         nivel_risco = "Risco Baixo"
         cor = "green"
         recomendacao = "Cliente com bom perfil de adimplência. Manter limite atual ou elegível para aumento gradual."
