@@ -61,7 +61,8 @@
   <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
     <!-- Caixa de Mensagens / Notificações (Substitui qualquer alert nativo) -->
-    <div id="toastMessage" class="hidden rounded-xl p-4 border text-sm flex items-center justify-between gap-4 transition-all">
+    <!-- Fixo no rodapé da tela: visível mesmo com a página rolada até o botão de calcular -->
+    <div id="toastMessage" role="status" aria-live="polite" class="hidden fixed bottom-4 inset-x-4 z-40 max-w-3xl mx-auto backdrop-blur-md shadow-2xl rounded-xl p-4 border text-sm flex items-center justify-between gap-4 transition-all">
       <div class="flex items-center gap-3">
         <span id="toastIcon" class="w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0"></span>
         <span id="toastText" class="font-medium"></span>
