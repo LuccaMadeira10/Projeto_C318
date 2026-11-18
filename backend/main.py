@@ -29,7 +29,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
 import pandas as pd
@@ -350,6 +350,34 @@ def obter_limiar() -> float:
     return float(STATE["metadados"].get("limiar_decisao", LIMIAR_PADRAO))
 
 
+CORTE_RISCO_MODERADO = 0.35
+RECOMENDACAO_BAIXO = (
+    "Cliente com bom perfil de adimplência. Manter limite atual ou elegível para aumento gradual."
+)
+RECOMENDACAO_MODERADO = (
+    "Atenção preventiva: enviar lembretes automáticos antes do vencimento e monitorar uso do rotativo."
+)
+RECOMENDACAO_ALTO = (
+    "Alta probabilidade de atraso no próximo mês. Recomenda-se oferta proativa de "
+    "parcelamento/renegociação e bloqueio de aumento de limite."
+)
+
+
+def classificar_risco(prob: float, limiar: float) -> Tuple[int, str, str, str]:
+    """
+    Regra única para classe e faixa de risco (sem contradições entre as duas):
+    - classe 1 (Risco Alto, red) quando prob >= limiar;
+    - Risco Moderado (yellow) quando min(0.35, limiar) <= prob < limiar;
+    - Risco Baixo (green) quando prob < min(0.35, limiar).
+    Retorna (classe, nivel, cor, recomendacao).
+    """
+    if prob >= limiar:
+        return 1, "Risco Alto", "red", RECOMENDACAO_ALTO
+    if prob >= min(CORTE_RISCO_MODERADO, limiar):
+        return 0, "Risco Moderado", "yellow", RECOMENDACAO_MODERADO
+    return 0, "Risco Baixo", "green", RECOMENDACAO_BAIXO
+
+
 def inicializar_modelo() -> None:
     """
     Executado no startup: carrega o artefato apontado por MODEL_PATH.
@@ -461,26 +489,14 @@ def prever_risco_credito(cliente: ClienteCreditoInput):
     df_input = limpar_categorias_uci(df_input)
 
     try:
-        classe_predita = int(STATE["pipeline"].predict(df_input)[0])
         prob_calote = float(STATE["pipeline"].predict_proba(df_input)[0][1])
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Erro ao executar inferência no Pipeline: {str(exc)}"
         )
 
-    # Regra de negócio para classificação visual no painel do Front-end
-    if prob_calote < 0.35:
-        nivel_risco = "Risco Baixo"
-        cor = "green"
-        recomendacao = "Cliente com bom perfil de adimplência. Manter limite atual ou elegível para aumento gradual."
-    elif prob_calote < 0.60:
-        nivel_risco = "Risco Moderado"
-        cor = "yellow"
-        recomendacao = "Atenção preventiva: enviar lembretes automáticos antes do vencimento e monitorar uso do rotativo."
-    else:
-        nivel_risco = "Risco Alto"
-        cor = "red"
-        recomendacao = "Alta probabilidade de atraso no próximo mês. Recomenda-se oferta proativa de parcelamento/renegociação e bloqueio de aumento de limite."
+    # Classe e faixa de risco vêm da mesma regra, com o limiar definido no artefato
+    classe_predita, nivel_risco, cor, recomendacao = classificar_risco(prob_calote, obter_limiar())
 
     return PredicaoOutput(
         inadimplente_predito=classe_predita,
