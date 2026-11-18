@@ -13,30 +13,21 @@ Como executar localmente:
    http://127.0.0.1:8000/docs
 """
 
+import logging
 import os
-from typing import Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+
 import joblib
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    precision_score,
-    recall_score,
-)
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+logger = logging.getLogger("credito_consciente")
 
 # Caminhos padrão para o modelo exportado e para o dataset da UCI
-MODEL_PATH = os.getenv("MODEL_PATH", "modelo_credito.joblib")
+MODEL_PATH_PADRAO = "modelo_credito.joblib"
 CSV_PATHS = [
     "UCI_Credit_Card.csv",
     "data/UCI_Credit_Card.csv",
@@ -73,6 +64,14 @@ FEATURE_COLUMNS: List[str] = [
 
 TARGET_COLUMN = "default.payment.next.month"
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Carrega o modelo no startup (e não durante o import do módulo)."""
+    inicializar_modelo()
+    yield
+
+
 app = FastAPI(
     title="API Crédito Consciente - Projeto C318 (Inatel)",
     description=(
@@ -80,6 +79,7 @@ app = FastAPI(
         "utilizando a base UCI Credit Card Default e Pipeline do Scikit-Learn."
     ),
     version="1.1.0",
+    lifespan=lifespan,
 )
 
 # Configuração de CORS essencial para permitir que o Front-end na Vercel consuma a API
@@ -218,182 +218,157 @@ def localizar_csv() -> Optional[str]:
     return None
 
 
-# Estado global em memória para armazenar o pipeline carregado e suas métricas de teste
-STATE = {
+# Estado global em memória. Só é preenchido no startup a partir do artefato gerado
+# pelo script de treino; sem artefato válido, permanece indisponível (sem fallback).
+STATE: Dict[str, Any] = {
     "pipeline": None,
-    "origem": "nao_inicializado",
-    "metricas": {
-        "algoritmo": "RandomForestClassifier (class_weight='balanced')",
-        "total_amostras_teste": 6000,
-        "acuracia": 0.7945,
-        "precisao": 0.5380,
-        "recall_sensibilidade": 0.6120,
-        "f1_score": 0.5726,
-        "matriz_confusao": {"VP": 812, "VN": 3955, "FP": 698, "FN": 515},
-    },
+    "metricas": None,
+    "metadados": {},
+    "origem": "indisponivel",
+    "erro": None,
 }
 
+CHAVES_METRICAS = [
+    "algoritmo",
+    "total_amostras_teste",
+    "acuracia",
+    "precisao",
+    "recall_sensibilidade",
+    "f1_score",
+    "matriz_confusao",
+]
+CHAVES_MATRIZ = ["VP", "VN", "FP", "FN"]
+LIMIAR_PADRAO = 0.5
 
-def construir_pipeline_sklearn() -> Pipeline:
+
+class ArtefatoInvalidoError(Exception):
+    """O artefato do modelo está ausente, ilegível ou fora do contrato esperado."""
+
+
+def caminho_modelo() -> str:
+    """Caminho do artefato, lido da variável MODEL_PATH no momento da chamada."""
+    return os.getenv("MODEL_PATH") or MODEL_PATH_PADRAO
+
+
+def carregar_modelo(caminho) -> Dict[str, Any]:
     """
-    Constrói o Pipeline padrão do Scikit-Learn seguindo as boas práticas de C318:
-    - Variáveis numéricas passam por StandardScaler.
-    - Variáveis categóricas demográficas passam por OneHotEncoder.
-    - Classificador usa class_weight='balanced' para priorizar o Recall em dados desbalanceados.
+    Carrega e valida o artefato gerado por analise_e_modelagem_c318.py.
+
+    Contrato (ver ARTEFATO_MODELO.md): dicionário com "pipeline" (Pipeline com
+    predict_proba e feature_names_in_ igual a FEATURE_COLUMNS), "metricas" e,
+    opcionalmente, "metadados". Campos adicionais são ignorados.
+    Nunca treina nem grava arquivos. Lança ArtefatoInvalidoError explicando o problema.
     """
-    colunas_categoricas = ["SEX", "EDUCATION", "MARRIAGE"]
-    colunas_numericas = [col for col in FEATURE_COLUMNS if col not in colunas_categoricas]
+    caminho = str(caminho)
+    if not os.path.isfile(caminho):
+        raise ArtefatoInvalidoError(f"arquivo do modelo não encontrado em '{caminho}'")
+    if os.path.getsize(caminho) == 0:
+        raise ArtefatoInvalidoError(f"arquivo do modelo '{caminho}' está vazio")
+    try:
+        artefato = joblib.load(caminho)
+    except Exception as exc:
+        raise ArtefatoInvalidoError(
+            f"não foi possível ler '{caminho}' (arquivo corrompido ou gerado com outra "
+            f"versão do scikit-learn): {type(exc).__name__}: {exc}"
+        ) from exc
 
-    preprocessador = ColumnTransformer(
-        transformers=[
-            ("num", StandardScaler(), colunas_numericas),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), colunas_categoricas),
-        ]
+    if not isinstance(artefato, dict):
+        raise ArtefatoInvalidoError(
+            "formato inválido: esperado um dicionário com as chaves 'pipeline' e 'metricas' "
+            f"(encontrado {type(artefato).__name__})"
+        )
+    faltantes = [chave for chave in ("pipeline", "metricas") if chave not in artefato]
+    if faltantes:
+        raise ArtefatoInvalidoError(f"artefato sem as chaves obrigatórias: {faltantes}")
+
+    pipeline = artefato["pipeline"]
+    if not hasattr(pipeline, "predict_proba"):
+        raise ArtefatoInvalidoError("o pipeline do artefato não possui predict_proba")
+    colunas = list(getattr(pipeline, "feature_names_in_", []))
+    if colunas != FEATURE_COLUMNS:
+        raise ArtefatoInvalidoError(
+            f"colunas do pipeline incompatíveis com a API: esperado {FEATURE_COLUMNS}, "
+            f"encontrado {colunas}"
+        )
+    classes = [int(c) for c in getattr(pipeline, "classes_", [0, 1])]
+    if classes != [0, 1]:
+        raise ArtefatoInvalidoError(f"classes do pipeline devem ser [0, 1], encontrado {classes}")
+
+    metricas = artefato["metricas"]
+    if not isinstance(metricas, dict) or any(chave not in metricas for chave in CHAVES_METRICAS):
+        raise ArtefatoInvalidoError(f"'metricas' deve conter as chaves {CHAVES_METRICAS}")
+    matriz = metricas["matriz_confusao"]
+    if not isinstance(matriz, dict) or any(chave not in matriz for chave in CHAVES_MATRIZ):
+        raise ArtefatoInvalidoError(f"'matriz_confusao' deve conter as chaves {CHAVES_MATRIZ}")
+
+    metadados = artefato.get("metadados") or {}
+    if not isinstance(metadados, dict):
+        raise ArtefatoInvalidoError("'metadados', quando presente, deve ser um dicionário")
+    limiar = metadados.get("limiar_decisao", LIMIAR_PADRAO)
+    if isinstance(limiar, bool) or not isinstance(limiar, (int, float)) or not 0.0 < limiar < 1.0:
+        raise ArtefatoInvalidoError(f"limiar_decisao inválido: {limiar!r} (esperado entre 0 e 1)")
+
+    return {"pipeline": pipeline, "metricas": metricas, "metadados": metadados}
+
+
+def descrever_origem(caminho, metadados: Dict[str, Any]) -> str:
+    """Texto de origem do modelo montado a partir dos metadados do artefato."""
+    nome = os.path.basename(str(caminho))
+    if not metadados:
+        return f"Artefato {nome} (sem metadados de treino)"
+    return (
+        f"Artefato {nome} gerado pelo script de treino em "
+        f"{metadados.get('treinado_em', 'data desconhecida')} "
+        f"(scikit-learn {metadados.get('sklearn_version', 'versão desconhecida')})"
     )
 
-    classificador = RandomForestClassifier(
-        n_estimators=120,
-        max_depth=10,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-    )
 
-    return Pipeline(
-        steps=[
-            ("preprocessador", preprocessador),
-            ("classificador", classificador),
-        ]
-    )
+def obter_limiar() -> float:
+    """Limiar de decisão do artefato carregado (padrão 0,50)."""
+    return float(STATE["metadados"].get("limiar_decisao", LIMIAR_PADRAO))
 
 
 def inicializar_modelo() -> None:
     """
-    1. Tenta carregar 'modelo_credito.joblib' (que guarda tanto o pipeline quanto as métricas reais).
-    2. Caso não exista, verifica se 'UCI_Credit_Card.csv' está na pasta, faz o
-       train_test_split estratificado (regra de ouro da C318!), treina o Pipeline
-       e já salva o arquivo 'modelo_credito.joblib' com as métricas reais do teste.
-    3. Caso nenhum dos dois esteja presente ainda, treina um modelo de demonstração
-       sintético para que a API nunca quebre durante os testes de Front-end.
+    Executado no startup: carrega o artefato apontado por MODEL_PATH.
+    Em caso de falha a API continua no ar, mas /predict e /metrics retornam 503.
     """
-    if os.path.exists(MODEL_PATH):
-        try:
-            artefato = joblib.load(MODEL_PATH)
-            # Suporta tanto um dicionário completo (pipeline + métricas) quanto apenas o Pipeline puro
-            if isinstance(artefato, dict) and "pipeline" in artefato:
-                STATE["pipeline"] = artefato["pipeline"]
-                STATE["metricas"] = artefato.get("metricas", STATE["metricas"])
-                STATE["origem"] = f"Carregado do artefato salvo ({MODEL_PATH})"
-            else:
-                STATE["pipeline"] = artefato
-                STATE["origem"] = f"Carregado do arquivo ({MODEL_PATH})"
-            return
-        except Exception as exc:
-            print(f"[Aviso] Falha ao carregar {MODEL_PATH}: {exc}")
-
-    csv_path = localizar_csv()
-    if csv_path:
-        try:
-            print(f"[C318] Lendo base de dados '{csv_path}' e treinando Pipeline Scikit-Learn...")
-            df = pd.read_csv(csv_path)
-            df = limpar_categorias_uci(df)
-
-            X = df[FEATURE_COLUMNS]
-            y = df[TARGET_COLUMN]
-
-            # Regra de ouro C318: separar treino e teste ANTES de ajustar transformações
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.20, random_state=42, stratify=y
-            )
-
-            pipeline = construir_pipeline_sklearn()
-            pipeline.fit(X_train, y_train)
-
-            # Avalia no conjunto de teste isolado
-            y_pred = pipeline.predict(X_test)
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-
-            metricas_calculadas = {
-                "algoritmo": "RandomForestClassifier (Pipeline Scikit-Learn)",
-                "total_amostras_teste": int(len(y_test)),
-                "acuracia": round(float(accuracy_score(y_test, y_pred)), 4),
-                "precisao": round(float(precision_score(y_test, y_pred, zero_division=0)), 4),
-                "recall_sensibilidade": round(float(recall_score(y_test, y_pred, zero_division=0)), 4),
-                "f1_score": round(float(f1_score(y_test, y_pred, zero_division=0)), 4),
-                "matriz_confusao": {
-                    "VP": int(tp),
-                    "VN": int(tn),
-                    "FP": int(fp),
-                    "FN": int(fn),
-                },
-            }
-
-            STATE["pipeline"] = pipeline
-            STATE["origem"] = f"Treinado a partir da base oficial ({csv_path})"
-            STATE["metricas"] = metricas_calculadas
-
-            # Salva o pipeline junto com as métricas reais de teste para carregamentos futuros
-            joblib.dump(
-                {
-                    "pipeline": pipeline,
-                    "metricas": metricas_calculadas,
-                },
-                MODEL_PATH,
-            )
-            print(f"[C318] Modelo treinado e salvo com sucesso em '{MODEL_PATH}'!")
-            return
-        except Exception as exc:
-            print(f"[Aviso] Erro ao treinar a partir do CSV: {exc}")
-
-    # Fallback sintético caso o aluno rode a API antes de colocar o CSV ou .joblib na pasta
-    rng = np.random.default_rng(42)
-    n_sintetico = 500
-    df_sint = pd.DataFrame(
-        {
-            "LIMIT_BAL": rng.uniform(10000, 300000, n_sintetico),
-            "SEX": rng.integers(1, 3, n_sintetico),
-            "EDUCATION": rng.integers(1, 5, n_sintetico),
-            "MARRIAGE": rng.integers(1, 4, n_sintetico),
-            "AGE": rng.integers(21, 70, n_sintetico),
-            "PAY_0": rng.integers(-1, 4, n_sintetico),
-            "PAY_2": rng.integers(-1, 4, n_sintetico),
-            "PAY_3": rng.integers(-1, 3, n_sintetico),
-            "PAY_4": rng.integers(-1, 3, n_sintetico),
-            "PAY_5": rng.integers(-1, 3, n_sintetico),
-            "PAY_6": rng.integers(-1, 3, n_sintetico),
-            "BILL_AMT1": rng.uniform(0, 100000, n_sintetico),
-            "BILL_AMT2": rng.uniform(0, 100000, n_sintetico),
-            "BILL_AMT3": rng.uniform(0, 100000, n_sintetico),
-            "BILL_AMT4": rng.uniform(0, 100000, n_sintetico),
-            "BILL_AMT5": rng.uniform(0, 100000, n_sintetico),
-            "BILL_AMT6": rng.uniform(0, 100000, n_sintetico),
-            "PAY_AMT1": rng.uniform(0, 20000, n_sintetico),
-            "PAY_AMT2": rng.uniform(0, 20000, n_sintetico),
-            "PAY_AMT3": rng.uniform(0, 20000, n_sintetico),
-            "PAY_AMT4": rng.uniform(0, 20000, n_sintetico),
-            "PAY_AMT5": rng.uniform(0, 20000, n_sintetico),
-            "PAY_AMT6": rng.uniform(0, 20000, n_sintetico),
-        }
-    )
-    y_sint = ((df_sint["PAY_0"] >= 1) & (df_sint["PAY_AMT1"] < df_sint["BILL_AMT1"] * 0.15)).astype(int)
-
-    pipeline_fallback = construir_pipeline_sklearn()
-    pipeline_fallback.fit(df_sint, y_sint)
-    STATE["pipeline"] = pipeline_fallback
-    STATE["origem"] = "Modelo de contingência (adicione UCI_Credit_Card.csv na pasta para treinar o real)"
+    STATE.update(pipeline=None, metricas=None, metadados={}, origem="indisponivel", erro=None)
+    caminho = caminho_modelo()
+    try:
+        artefato = carregar_modelo(caminho)
+    except ArtefatoInvalidoError as exc:
+        STATE["erro"] = str(exc)
+        logger.error("Falha ao carregar o modelo: %s", exc)
+        return
+    STATE.update(artefato)
+    STATE["origem"] = descrever_origem(caminho, artefato["metadados"])
+    logger.info("Modelo carregado: %s", STATE["origem"])
 
 
-# Inicializa o modelo ao subir o servidor
-inicializar_modelo()
+def exigir_modelo() -> None:
+    """Interrompe a requisição com HTTP 503 quando não há modelo válido carregado."""
+    if STATE["pipeline"] is None or STATE["metricas"] is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Modelo preditivo indisponível: {STATE['erro'] or 'modelo não carregado'}. "
+                "Gere o artefato executando 'python analise_e_modelagem_c318.py' na pasta "
+                "backend/ (ou defina MODEL_PATH com o caminho de um artefato válido) e "
+                "reinicie a API."
+            ),
+        )
 
 
 @app.get("/", tags=["Status"])
 def healthcheck():
     """Rota raiz para verificar se a API está online e qual modelo está ativo."""
+    carregado = STATE["pipeline"] is not None
     return {
-        "status": "online",
+        "status": "online" if carregado else "modelo_indisponivel",
         "projeto": "Crédito Consciente - C318 (Inatel)",
         "modelo_ativo": STATE["origem"],
+        "modelo_carregado": carregado,
         "rotas_disponiveis": ["/predict", "/metrics", "/dataset-check", "/docs"],
     }
 
@@ -444,8 +419,7 @@ def prever_risco_credito(cliente: ClienteCreditoInput):
     o histórico caso o usuário envie apenas o mês mais recente, executa o Pipeline
     do Scikit-Learn e retorna a classe predita (0 ou 1) e a probabilidade de atraso.
     """
-    if STATE["pipeline"] is None:
-        raise HTTPException(status_code=503, detail="Modelo preditivo não inicializado.")
+    exigir_modelo()
 
     dados_dict = cliente.model_dump()
 
@@ -501,6 +475,7 @@ def obter_metricas_modelo():
     Retorna as métricas de avaliação do modelo sobre o conjunto de teste (Recall,
     Precisão, Acurácia, F1-Score e Matriz de Confusão) para exibição no Front-end.
     """
+    exigir_modelo()
     m = STATE["metricas"]
     return MetricasModeloOutput(
         algoritmo=m["algoritmo"],

@@ -74,16 +74,134 @@ def modelo_real() -> Path:
     return caminho
 
 
-def _abrir_cliente(monkeypatch, caminho_modelo):
-    """Configura MODEL_PATH e importa o main (o startup roda dentro do TestClient)."""
+def abrir_cliente(monkeypatch, caminho_modelo):
+    """
+    Configura MODEL_PATH e (re)importa o main. O carregamento do modelo acontece no
+    startup, isto é, dentro de `with TestClient(main.app)`.
+
+    O reload garante isolamento entre testes que usam artefatos diferentes.
+    """
     monkeypatch.setenv("MODEL_PATH", str(caminho_modelo))
-    main = importlib.import_module("main")
+    main = importlib.reload(importlib.import_module("main"))
     return main, TestClient(main.app)
 
 
 @pytest.fixture
 def cliente(monkeypatch, modelo_real):
     """TestClient com o startup executado e o modelo real carregado."""
-    _, tc = _abrir_cliente(monkeypatch, modelo_real)
+    _, tc = abrir_cliente(monkeypatch, modelo_real)
     with tc as c:
         yield c
+
+
+# ---------------------------------------------------------------------------
+# Fábrica de artefatos pequenos (somente para testes; a produção nunca treina)
+# ---------------------------------------------------------------------------
+
+def _treinar_pipeline_pequeno(renomear_pay0: bool = False):
+    """
+    Treina um Pipeline pequeno com 1.500 registros reais da base UCI, apenas para
+    exercitar o carregamento e a inferência da API. Retorna (pipeline, metricas).
+    """
+    import pandas as pd
+    from sklearn.compose import ColumnTransformer
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+    from test_contrato_caracterizacao import FEATURES_ESPERADAS
+
+    df = pd.read_csv(CSV_REAL).sample(n=2000, random_state=7)
+    df["EDUCATION"] = df["EDUCATION"].replace({0: 4, 5: 4, 6: 4})
+    df["MARRIAGE"] = df["MARRIAGE"].replace({0: 3})
+    colunas = list(FEATURES_ESPERADAS)
+    if renomear_pay0:
+        df = df.rename(columns={"PAY_0": "PAY_1"})
+        colunas = ["PAY_1" if c == "PAY_0" else c for c in colunas]
+    X, y = df[colunas], df["default.payment.next.month"]
+    X_tr, X_te, y_tr, y_te = X.iloc[:1500], X.iloc[1500:], y.iloc[:1500], y.iloc[1500:]
+
+    categoricas = ["SEX", "EDUCATION", "MARRIAGE"]
+    pipeline = Pipeline([
+        ("preprocessador", ColumnTransformer([
+            ("num", StandardScaler(), [c for c in colunas if c not in categoricas]),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categoricas),
+        ])),
+        ("classificador", RandomForestClassifier(n_estimators=10, max_depth=5, random_state=0)),
+    ])
+    pipeline.fit(X_tr, y_tr)
+    y_pred = pipeline.predict(X_te)
+    tn, fp, fn, tp = confusion_matrix(y_te, y_pred).ravel()
+    metricas = {
+        "algoritmo": "RandomForestClassifier (artefato de teste)",
+        "total_amostras_teste": int(len(y_te)),
+        "acuracia": round(float(accuracy_score(y_te, y_pred)), 4),
+        "precisao": round(float(precision_score(y_te, y_pred, zero_division=0)), 4),
+        "recall_sensibilidade": round(float(recall_score(y_te, y_pred, zero_division=0)), 4),
+        "f1_score": round(float(f1_score(y_te, y_pred, zero_division=0)), 4),
+        "matriz_confusao": {"VP": int(tp), "VN": int(tn), "FP": int(fp), "FN": int(fn)},
+    }
+    return pipeline, metricas
+
+
+@pytest.fixture(scope="session")
+def _pipelines_pequenos():
+    return {
+        "valido": _treinar_pipeline_pequeno(),
+        "colunas_incompativeis": _treinar_pipeline_pequeno(renomear_pay0=True),
+    }
+
+
+VARIANTES_DEFEITUOSAS = [
+    "ausente",
+    "corrompido",
+    "vazio",
+    "sem_pipeline",
+    "sem_metricas",
+    "colunas_incompativeis",
+    "pipeline_puro",
+]
+
+
+@pytest.fixture
+def fabrica_artefato(tmp_path, _pipelines_pequenos):
+    """
+    Retorna uma função criar(variante="valido", limiar=None, metadados=True) que grava
+    um artefato em tmp_path e devolve o caminho. Variantes: "valido" e as listadas em
+    VARIANTES_DEFEITUOSAS.
+    """
+    import joblib
+    import sklearn
+
+    def criar(variante: str = "valido", limiar=None, metadados: bool = True) -> Path:
+        caminho = tmp_path / f"modelo_{variante}.joblib"
+        pipeline, metricas = _pipelines_pequenos[
+            "colunas_incompativeis" if variante == "colunas_incompativeis" else "valido"
+        ]
+        artefato = {"pipeline": pipeline, "metricas": dict(metricas)}
+        if metadados:
+            artefato["metadados"] = {
+                "sklearn_version": sklearn.__version__,
+                "treinado_em": "2026-11-18T00:00:00+00:00",
+                "csv_origem": "data/UCI_Credit_Card.csv",
+                "limiar_decisao": 0.5 if limiar is None else limiar,
+            }
+        if variante == "ausente":
+            return caminho
+        if variante == "corrompido":
+            caminho.write_bytes(b"isto nao e um arquivo joblib \x00\x01\x02" * 50)
+            return caminho
+        if variante == "vazio":
+            caminho.write_bytes(b"")
+            return caminho
+        if variante == "sem_pipeline":
+            artefato.pop("pipeline")
+        elif variante == "sem_metricas":
+            artefato.pop("metricas")
+        elif variante == "pipeline_puro":
+            artefato = pipeline
+        joblib.dump(artefato, caminho)
+        return caminho
+
+    return criar
