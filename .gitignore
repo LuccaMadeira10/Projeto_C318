@@ -1,2 +1,8 @@
 .DS_Store
 /backend/__pycache__
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.png
+Revisao_Projeto_C318.pdf
