@@ -58,6 +58,11 @@ sns.set_theme(style="whitegrid", palette="muted")
 # "Random Forest".
 MODELO_ESCOLHIDO = None
 
+# Sexo, idade e estado civil (SEX, AGE, MARRIAGE). "auto" = regra padrão: se a queda de
+# ROC-AUC sem esses atributos for menor que 1 desvio-padrão entre folds, o modelo de produção
+# NÃO os usa. True/False forçam a decisão do grupo.
+USAR_ATRIBUTOS_SENSIVEIS = "auto"
+
 # ---------------------------------------------------------------------------
 # Configuração de execução (reprodutível: semente fixa em tudo)
 # ---------------------------------------------------------------------------
@@ -283,13 +288,24 @@ METRICAS_CV = {
 }
 
 
-def criar_preprocessador() -> ColumnTransformer:
-    return ColumnTransformer(
-        transformers=[
-            ("num", StandardScaler(), COLUNAS_NUMERICAS),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), COLUNAS_CATEGORICAS),
-        ]
-    )
+ATRIBUTOS_SENSIVEIS = ["SEX", "AGE", "MARRIAGE"]
+
+
+def criar_preprocessador(usar_sensiveis: bool = True) -> ColumnTransformer:
+    """
+    Mesmo pré-processamento para todos os modelos. Sem os atributos sensíveis, eles são
+    descartados DENTRO do ColumnTransformer: a entrada continua com as 23 colunas (contrato
+    da API), mas SEX, AGE e MARRIAGE não chegam ao classificador.
+    """
+    removidos = [] if usar_sensiveis else ATRIBUTOS_SENSIVEIS
+    transformadores = [
+        ("num", StandardScaler(), [c for c in COLUNAS_NUMERICAS if c not in removidos]),
+        ("cat", OneHotEncoder(handle_unknown="ignore"),
+         [c for c in COLUNAS_CATEGORICAS if c not in removidos]),
+    ]
+    if removidos:
+        transformadores.append(("descartados", "drop", removidos))
+    return ColumnTransformer(transformers=transformadores)
 
 
 def criar_classificador(nome: str):
@@ -310,9 +326,9 @@ def criar_classificador(nome: str):
     raise ValueError(f"modelo desconhecido: {nome}")
 
 
-def criar_pipeline(nome: str) -> Pipeline:
+def criar_pipeline(nome: str, usar_sensiveis: bool = True) -> Pipeline:
     return Pipeline([
-        ("preprocessador", criar_preprocessador()),
+        ("preprocessador", criar_preprocessador(usar_sensiveis)),
         ("classificador", criar_classificador(nome)),
     ])
 
@@ -521,17 +537,127 @@ def salvar_json(dados: dict, nome: str) -> None:
     print(f"Arquivo salvo em: {exibir_caminho(caminho)}")
 
 
+# %% [markdown]
+# ---
+# ## 5. Sexo, idade e estado civil: o modelo precisa deles?
+# A proposta do projeto fala em **uso responsável** dos dados. `SEX`, `AGE` e `MARRIAGE` são
+# características pessoais que não descrevem o comportamento de pagamento do cliente; usá-las para
+# decidir crédito pode reproduzir discriminações presentes nos dados históricos e é difícil de
+# justificar para o cliente e para um regulador. Por outro lado, retirá-las só se justifica se o
+# modelo não piorar de forma relevante.
+#
+# **Experimento (somente treino):** a mesma validação cruzada do modelo vencedor, com os mesmos
+# hiperparâmetros, com e sem esses três atributos.
+#
+# **Regra padrão:** se a queda de ROC-AUC sem eles for menor que 1 desvio-padrão entre folds
+# (variação natural do próprio modelo), a diferença não é relevante e o modelo de produção **não**
+# os usa. Nesse caso o `GridSearchCV` do vencedor é refeito sem eles, pois os melhores
+# hiperparâmetros podem mudar. Os atributos são descartados dentro do `ColumnTransformer`, então a
+# API continua recebendo as 23 colunas.
+#
+# **Limitação:** retirar as colunas não garante um modelo justo. Outras variáveis (limite de
+# crédito, escolaridade) podem carregar parte da mesma informação. Uma auditoria de justiça por
+# grupo fica fora do escopo. A decisão final é do grupo (`USAR_ATRIBUTOS_SENSIVEIS` no topo).
+
+# %%
+def validar(pipeline: Pipeline) -> dict:
+    """Validação cruzada no treino com a mesma CV e as mesmas métricas."""
+    return cross_validate(pipeline, X_train, y_train, cv=CV, scoring=METRICAS_CV,
+                          n_jobs=N_JOBS, error_score="raise")
+
+
+parametros_vencedor = melhores_parametros[modelo_vencedor_nome]
+cv_com = validar(criar_pipeline(modelo_vencedor_nome, True).set_params(**parametros_vencedor))
+cv_sem = validar(criar_pipeline(modelo_vencedor_nome, False).set_params(**parametros_vencedor))
+
+queda_auc = cv_com["test_roc_auc"].mean() - cv_sem["test_roc_auc"].mean()
+dp_auc_com = cv_com["test_roc_auc"].std(ddof=1)
+dif_pareada_auc = cv_com["test_roc_auc"] - cv_sem["test_roc_auc"]
+dif_pareada_f1 = cv_com["test_f1"] - cv_sem["test_f1"]
+dif_pareada_pr = cv_com["test_pr_auc"] - cv_sem["test_pr_auc"]
+regra_usa_sensiveis = bool(queda_auc >= dp_auc_com)
+if USAR_ATRIBUTOS_SENSIVEIS == "auto":
+    usar_sensiveis = regra_usa_sensiveis
+else:
+    usar_sensiveis = bool(USAR_ATRIBUTOS_SENSIVEIS)
+
+
+def linha_sensiveis(configuracao: str, resumo: dict) -> dict:
+    resumo = dict(resumo)
+    resumo.pop("modelo", None)
+    return {"configuracao": configuracao, **resumo}
+
+
+linhas_sensiveis = [
+    linha_sensiveis("com SEX, AGE e MARRIAGE", resumir_cv("", cv_com)),
+    linha_sensiveis("sem SEX, AGE e MARRIAGE (mesmos hiperparâmetros)", resumir_cv("", cv_sem)),
+    {
+        "configuracao": "diferença pareada por fold (com - sem)",
+        "roc_auc_media": dif_pareada_auc.mean(), "roc_auc_dp": dif_pareada_auc.std(ddof=1),
+        "pr_auc_media": dif_pareada_pr.mean(), "pr_auc_dp": dif_pareada_pr.std(ddof=1),
+        "f1_media": dif_pareada_f1.mean(), "f1_dp": dif_pareada_f1.std(ddof=1),
+    },
+]
+
+parametros_finais = parametros_vencedor
+if not usar_sensiveis:
+    print(f"Refazendo o GridSearchCV de {modelo_vencedor_nome} sem os atributos sensíveis...")
+    _, parametros_finais, melhor_sem = executar_grid(
+        criar_pipeline(modelo_vencedor_nome, False), GRADES[modelo_vencedor_nome], X_train, y_train
+    )
+    linhas_sensiveis.append(linha_sensiveis(
+        f"sem SEX, AGE e MARRIAGE (GridSearchCV refeito: {parametros_legiveis(parametros_finais)})",
+        resumir_grid("", melhor_sem),
+    ))
+
+df_sensiveis = pd.DataFrame(linhas_sensiveis)
+print("\n=== COM vs SEM ATRIBUTOS SENSÍVEIS (CV no treino) ===")
+print(df_sensiveis[["configuracao", "roc_auc_media", "roc_auc_dp", "f1_media", "f1_dp"]]
+      .round(4).to_string(index=False))
+salvar_tabela(df_sensiveis.round(6), "sensiveis_com_vs_sem.csv")
+
+justificativa_sensiveis = (
+    f"Sem SEX, AGE e MARRIAGE (mesmos hiperparâmetros), a ROC-AUC média na CV passou de "
+    f"{cv_com['test_roc_auc'].mean():.4f} para {cv_sem['test_roc_auc'].mean():.4f} "
+    f"(diferença com - sem: {round(queda_auc, 4) + 0.0:+.4f}); o desvio-padrão entre folds do modelo com os atributos é "
+    f"{dp_auc_com:.4f}. O F1 passou de {cv_com['test_f1'].mean():.4f} para "
+    f"{cv_sem['test_f1'].mean():.4f}. Diferença pareada por fold (com - sem): ROC-AUC "
+    f"{dif_pareada_auc.mean():.4f} ± {dif_pareada_auc.std(ddof=1):.4f}. "
+    + ("A queda é menor que 1 desvio-padrão: pela regra padrão, o modelo de produção NÃO usa "
+       "esses atributos." if not regra_usa_sensiveis else
+       "A queda é de pelo menos 1 desvio-padrão: pela regra padrão, o modelo de produção usa "
+       "esses atributos.")
+)
+print("\n" + justificativa_sensiveis)
+if USAR_ATRIBUTOS_SENSIVEIS != "auto" and usar_sensiveis != regra_usa_sensiveis:
+    print(f"ATENÇÃO: o grupo forçou USAR_ATRIBUTOS_SENSIVEIS = {USAR_ATRIBUTOS_SENSIVEIS}.")
+print(f"Atributos sensíveis usados no modelo de produção: {usar_sensiveis}")
+print(f"Hiperparâmetros finais: {parametros_legiveis(parametros_finais)}")
+
+resumo_hiperparametros["atributos_sensiveis"] = {
+    "usados": usar_sensiveis,
+    "regra_indicaria_usar": regra_usa_sensiveis,
+    "justificativa": justificativa_sensiveis,
+}
+resumo_hiperparametros["final"] = {
+    "modelo": modelo_vencedor_nome,
+    "atributos_sensiveis_usados": usar_sensiveis,
+    "parametros": parametros_legiveis(parametros_finais),
+    "parametros_pipeline": {k: (v.item() if hasattr(v, "item") else v)
+                            for k, v in parametros_finais.items()},
+}
 salvar_json(resumo_hiperparametros, "melhores_hiperparametros.json")
+
+# Configuração final (ainda não ajustada): usada na escolha do corte e na avaliação final
+pipeline_final_config = criar_pipeline(modelo_vencedor_nome, usar_sensiveis).set_params(**parametros_finais)
 
 # %% [markdown]
 # ---
-# ## 5. Avaliação final no teste
+# ## 6. Avaliação final no teste
 # Só depois de todas as escolhas o conjunto de teste é usado, uma única vez.
 
 # %%
-pipeline_vencedor = criar_pipeline(modelo_vencedor_nome).set_params(
-    **melhores_parametros[modelo_vencedor_nome]
-).fit(X_train, y_train)
+pipeline_vencedor = clone(pipeline_final_config).fit(X_train, y_train)
 LIMIAR = 0.5
 proba_teste = pipeline_vencedor.predict_proba(X_test)[:, 1]
 y_pred = (proba_teste >= LIMIAR).astype(int)
@@ -559,6 +685,7 @@ metadados_artefato = {
     "treinado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     "csv_origem": csv_origem,
     "limiar_decisao": LIMIAR,
+    "atributos_sensiveis_usados": usar_sensiveis,
 }
 
 joblib.dump(
