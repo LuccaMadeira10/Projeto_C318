@@ -196,10 +196,22 @@ class ClienteCreditoInput(BaseModel):
     PAY_AMT6: Optional[float] = Field(None, ge=0, description="Valor pago há 6 meses")
 
 
+AVISO_ESCORE = (
+    "Escore do modelo entre 0 e 1, não necessariamente uma probabilidade calibrada. "
+    "Modelos treinados com class_weight='balanced' tendem a superestimar a chance real de "
+    "inadimplência, cuja frequência observada na base é de aproximadamente 22%. Use o valor "
+    "para ordenar clientes por risco, não como percentual literal de chance."
+)
+
+
 class PredicaoOutput(BaseModel):
-    inadimplente_predito: int
-    probabilidade_atraso: float
-    probabilidade_percentual: str
+    inadimplente_predito: int = Field(
+        ..., description="Classe prevista: 1 quando o escore é maior ou igual ao limiar de decisão do artefato."
+    )
+    probabilidade_atraso: float = Field(..., description=AVISO_ESCORE)
+    probabilidade_percentual: str = Field(
+        ..., description="probabilidade_atraso formatada em percentual (mesma ressalva de calibração)."
+    )
     nivel_risco: str
     cor_indicador: str
     recomendacao_negocio: str
@@ -368,6 +380,30 @@ def obter_limiar() -> float:
     return float(STATE["metadados"].get("limiar_decisao", LIMIAR_PADRAO))
 
 
+def descrever_observacao() -> str:
+    """
+    Observação de /metrics montada a partir do modelo carregado (sem hiperparâmetros
+    escritos à mão): menciona class_weight='balanced' somente se o classificador o usa.
+    """
+    pipeline = STATE["pipeline"]
+    classificador = pipeline.steps[-1][1] if hasattr(pipeline, "steps") else pipeline
+    balanceado = getattr(classificador, "class_weight", None) == "balanced"
+    texto = (
+        "Métricas calculadas pelo script de treino no conjunto de teste e lidas do artefato. "
+        "A base da UCI possui ~22% de inadimplentes (desbalanceada), por isso o Recall "
+        "(Sensibilidade) e os Falsos Negativos são priorizados na avaliação. "
+    )
+    if balanceado:
+        texto += (
+            "O classificador foi treinado com class_weight='balanced', o que tende a "
+            "superestimar a chance real de inadimplência. "
+        )
+    return texto + (
+        "Por isso, probabilidade_atraso é um escore do modelo, não uma probabilidade "
+        f"calibrada: use-o para ordenar riscos. Limiar de decisão: {obter_limiar():.2f}."
+    )
+
+
 CORTE_RISCO_MODERADO = 0.35
 RECOMENDACAO_BAIXO = (
     "Cliente com bom perfil de adimplência. Manter limite atual ou elegível para aumento gradual."
@@ -495,8 +531,11 @@ def prever_risco_credito(
     """
     Recebe os dados de um cliente do Front-end (Vercel), preenche automaticamente
     o histórico caso o usuário envie apenas o mês mais recente, executa o Pipeline
-    do Scikit-Learn e retorna a classe predita (0 ou 1) e a probabilidade de atraso.
+    do Scikit-Learn e retorna a classe predita (0 ou 1) e o escore de risco.
 
+    Atenção: probabilidade_atraso é o escore de predict_proba, não uma probabilidade
+    calibrada; serve para ordenar riscos, não como percentual literal de chance.
+    Classe e faixa de risco usam o limiar_decisao do artefato (padrão 0,50).
     Os campos estimados são listados em campos_preenchidos_automaticamente e
     sinalizados em aviso.
     """
@@ -563,6 +602,7 @@ def obter_metricas_modelo():
     """
     Retorna as métricas de avaliação do modelo sobre o conjunto de teste (Recall,
     Precisão, Acurácia, F1-Score e Matriz de Confusão) para exibição no Front-end.
+    Todos os valores são lidos do artefato gerado pelo script de treino.
     """
     exigir_modelo()
     m = STATE["metricas"]
@@ -575,9 +615,5 @@ def obter_metricas_modelo():
         recall_sensibilidade=m["recall_sensibilidade"],
         f1_score=m["f1_score"],
         matriz_confusao=m["matriz_confusao"],
-        observacao_c318=(
-            "Como a base da UCI possui ~22% de inadimplentes (desbalanceada), "
-            "utilizamos class_weight='balanced' para priorizar o Recall (Sensibilidade) "
-            "e reduzir os Falsos Negativos (clientes que atrasam sem o banco prever)."
-        ),
+        observacao_c318=descrever_observacao(),
     )
