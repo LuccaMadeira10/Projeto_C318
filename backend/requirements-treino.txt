@@ -1,0 +1,4 @@
+# Python 3.14.7 (testado) — runtime + bibliotecas de gráficos do script de treino
+-r requirements.txt
+matplotlib==3.11.2
+seaborn==0.13.2

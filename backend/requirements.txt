@@ -1,0 +1,8 @@
+# Python 3.14.7 (testado) — dependências de execução da API (runtime)
+fastapi==0.164.0
+uvicorn==0.54.0
+scikit-learn==1.9.1
+pandas==3.1.1
+numpy==2.5.5
+joblib==1.6.0
+pydantic==2.14.3
