@@ -442,7 +442,8 @@ def inicializar_modelo() -> None:
     try:
         artefato = carregar_modelo(caminho)
     except ArtefatoInvalidoError as exc:
-        STATE["erro"] = str(exc)
+        # O log registra o caminho completo; a resposta HTTP mostra apenas o nome do arquivo
+        STATE["erro"] = str(exc).replace(str(caminho), caminho.name)
         logger.error("Falha ao carregar o modelo: %s", exc)
         return
     STATE.update(artefato)
