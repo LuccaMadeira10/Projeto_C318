@@ -40,6 +40,13 @@ joblib.dump({
   Baixo abaixo disso. Mudar o limiar não exige alteração na API, desde que ele seja maior
   que 0,35: com limiar <= 0,35 a faixa Moderado desaparece e `classificar_risco` precisaria de
   faixas proporcionais ao limiar (o script de treino avisa quando isso acontece).
+- **Casas decimais do limiar (restrição de exibição):** `POST /predict` devolve
+  `probabilidade_atraso` (4 casas) e `probabilidade_percentual` (1 casa) **truncados para baixo**,
+  enquanto a classe usa o escore bruto. Isso garante que o valor exibido fica do mesmo lado do
+  corte que a classe **somente se `limiar_decisao` tiver no máximo 3 casas decimais** (1 casa no
+  percentual = 3 casas na probabilidade). Os cortes avaliados pelo script (0,10 a 0,90, passo
+  0,05) atendem. Com um corte como 0,5037, o escore 0,50375 é classe 1 mas aparece como 50,3%.
+  A API registra um aviso no log ao carregar um artefato assim, sem bloquear o carregamento.
 - Artefato ausente, vazio, corrompido ou fora do contrato: `/predict` e `/metrics`
   retornam HTTP 503 e `GET /` informa `modelo_carregado: false`.
 
