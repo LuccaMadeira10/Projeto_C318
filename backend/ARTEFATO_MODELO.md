@@ -25,7 +25,9 @@ joblib.dump({
 - Chaves adicionais são ignoradas. Um `Pipeline` puro (sem dicionário) é rejeitado.
 - `limiar_decisao` define a classe e a faixa de risco em `POST /predict`:
   classe 1 (Risco Alto) se escore >= limiar; Moderado se min(0.35, limiar) <= escore < limiar;
-  Baixo abaixo disso. Mudar o limiar não exige alteração na API.
+  Baixo abaixo disso. Mudar o limiar não exige alteração na API, desde que ele seja maior
+  que 0,35: com limiar <= 0,35 a faixa Moderado desaparece e `classificar_risco` precisaria de
+  faixas proporcionais ao limiar (o script de treino avisa quando isso acontece).
 - Artefato ausente, vazio, corrompido ou fora do contrato: `/predict` e `/metrics`
   retornam HTTP 503 e `GET /` informa `modelo_carregado: false`.
 

@@ -745,6 +745,17 @@ if LIMIAR_ESCOLHIDO is not None and not np.isclose(LIMIAR, limiar_otimo_custo):
     print(f"ATENÇÃO: o grupo forçou LIMIAR_ESCOLHIDO = {LIMIAR:.2f}.")
 print(f"Corte de decisão do modelo de produção: {LIMIAR:.2f}")
 
+# Compatibilidade com a API: classificar_risco (main.py) começa o "Risco Moderado" em
+# min(0,35; limiar). Com corte <= 0,35 essa faixa some e a API precisaria de faixas
+# proporcionais ao limiar (ver ARTEFATO_MODELO.md).
+INICIO_RISCO_MODERADO_API = 0.35
+if LIMIAR <= INICIO_RISCO_MODERADO_API:
+    print(f"ATENÇÃO: corte {LIMIAR:.2f} <= {INICIO_RISCO_MODERADO_API}: a faixa 'Risco Moderado' "
+          "da API desaparece; ajuste classificar_risco em main.py antes de publicar este artefato.")
+else:
+    print(f"Faixas da API com este corte: Baixo < {INICIO_RISCO_MODERADO_API:.2f} <= Moderado "
+          f"< {LIMIAR:.2f} <= Alto (classe 1 se e somente se Risco Alto).")
+
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(16, 5.5))
 axes[0].plot(df_limiar["limiar"], df_limiar["recall"], marker="o", label="Recall (caloteiros detectados)")
