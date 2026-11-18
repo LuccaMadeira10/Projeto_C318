@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -77,6 +77,13 @@ FEATURE_COLUMNS: List[str] = [
 ]
 
 TARGET_COLUMN = "default.payment.next.month"
+
+# Histórico dos meses 2 a 6: opcional no payload (preenchido automaticamente se ausente)
+CAMPOS_OPCIONAIS: List[str] = (
+    [f"PAY_{i}" for i in range(2, 7)]
+    + [f"BILL_AMT{i}" for i in range(2, 7)]
+    + [f"PAY_AMT{i}" for i in range(2, 7)]
+)
 
 
 @asynccontextmanager
@@ -196,6 +203,17 @@ class PredicaoOutput(BaseModel):
     nivel_risco: str
     cor_indicador: str
     recomendacao_negocio: str
+    campos_preenchidos_automaticamente: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Campos dos meses 2 a 6 que não foram enviados e foram estimados pela API a "
+            "partir do mês mais recente. Lista vazia quando todos foram informados."
+        ),
+    )
+    aviso: Optional[str] = Field(
+        None,
+        description="Presente somente quando houve preenchimento automático de campos.",
+    )
 
 
 class MetricasModeloOutput(BaseModel):
@@ -464,15 +482,39 @@ def verificar_dataset_uci():
 
 
 @app.post("/predict", response_model=PredicaoOutput, tags=["Inferência de ML"])
-def prever_risco_credito(cliente: ClienteCreditoInput):
+def prever_risco_credito(
+    cliente: ClienteCreditoInput,
+    estrito: bool = Query(
+        False,
+        description=(
+            "Se true, exige os 15 campos dos meses 2 a 6 (PAY_2..6, BILL_AMT2..6, "
+            "PAY_AMT2..6) e retorna 422 listando os ausentes, sem preenchimento automático."
+        ),
+    ),
+):
     """
     Recebe os dados de um cliente do Front-end (Vercel), preenche automaticamente
     o histórico caso o usuário envie apenas o mês mais recente, executa o Pipeline
     do Scikit-Learn e retorna a classe predita (0 ou 1) e a probabilidade de atraso.
-    """
-    exigir_modelo()
 
+    Os campos estimados são listados em campos_preenchidos_automaticamente e
+    sinalizados em aviso.
+    """
     dados_dict = cliente.model_dump()
+    campos_preenchidos = [col for col in CAMPOS_OPCIONAIS if dados_dict[col] is None]
+    if estrito and campos_preenchidos:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "mensagem": (
+                    "Modo estrito (estrito=true): todos os campos dos meses 2 a 6 devem ser "
+                    "informados."
+                ),
+                "campos_faltantes": campos_preenchidos,
+            },
+        )
+
+    exigir_modelo()
 
     # Preenche de forma inteligente os meses 2 a 6 caso o Front-end envie apenas o resumo do mês 1
     status_base_antigo = 0 if dados_dict["PAY_0"] <= 0 else max(0, dados_dict["PAY_0"] - 1)
@@ -505,6 +547,14 @@ def prever_risco_credito(cliente: ClienteCreditoInput):
         nivel_risco=nivel_risco,
         cor_indicador=cor,
         recomendacao_negocio=recomendacao,
+        campos_preenchidos_automaticamente=campos_preenchidos,
+        aviso=(
+            f"{len(campos_preenchidos)} campo(s) do histórico (meses 2 a 6) não foram "
+            "informados e foram estimados automaticamente a partir do mês mais recente. "
+            "Esses valores não são dados reais do cliente, o que reduz a confiança na previsão."
+            if campos_preenchidos
+            else None
+        ),
     )
 
 
