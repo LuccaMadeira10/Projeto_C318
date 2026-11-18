@@ -42,7 +42,13 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_validate, train_test_split
+from sklearn.model_selection import (
+    GridSearchCV,
+    StratifiedKFold,
+    cross_val_predict,
+    cross_validate,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -62,6 +68,16 @@ MODELO_ESCOLHIDO = None
 # ROC-AUC sem esses atributos for menor que 1 desvio-padrão entre folds, o modelo de produção
 # NÃO os usa. True/False forçam a decisão do grupo.
 USAR_ATRIBUTOS_SENSIVEIS = "auto"
+
+# Custo de cada tipo de erro. HIPÓTESE DIDÁTICA (não há dado real de custo na base):
+# deixar passar um caloteiro (falso negativo) custa 3 vezes mais que incomodar um bom
+# pagador (falso positivo). A sensibilidade a outras razões (1, 2, 3, 5 e 10) é mostrada.
+CUSTO_FN = 3.0
+CUSTO_FP = 1.0
+
+# Corte de decisão (classe 1 se escore >= corte). None = corte que minimiza o custo total
+# esperado na razão CUSTO_FN/CUSTO_FP, entre 0,10 e 0,90 (passo 0,05); ou um valor fixo.
+LIMIAR_ESCOLHIDO = None
 
 # ---------------------------------------------------------------------------
 # Configuração de execução (reprodutível: semente fixa em tudo)
@@ -653,12 +669,147 @@ pipeline_final_config = criar_pipeline(modelo_vencedor_nome, usar_sensiveis).set
 
 # %% [markdown]
 # ---
-# ## 6. Avaliação final no teste
+# ## 6. Custo dos erros e escolha do corte de decisão
+# O modelo devolve um escore entre 0 e 1; o **corte** transforma esse escore em decisão
+# ("risco" se escore >= corte). Cada corte troca um tipo de erro pelo outro:
+# - **Falso negativo (FN):** o cliente vai atrasar e o modelo diz "vai pagar". O banco deixa passar
+#   um caloteiro e perde a chance de agir antes (renegociar, não aumentar o limite).
+# - **Falso positivo (FP):** o cliente vai pagar e o modelo diz "risco". O banco incomoda um bom
+#   pagador (contato desnecessário, limite segurado, cliente insatisfeito).
+#
+# Custo total esperado de um corte: `CUSTO_FN × FN + CUSTO_FP × FP`. Não há dado real de custo
+# nesta base, então a razão **3 para 1** é uma **hipótese didática** (um FN custa 3 vezes um FP).
+# Por isso também mostramos qual seria o corte ótimo para as razões 1, 2, 3, 5 e 10.
+#
+# **Sem usar o teste:** os escores vêm de `cross_val_predict` no treino (cada cliente do treino é
+# avaliado pelo modelo do fold em que ele ficou de fora), com a mesma validação cruzada e o
+# modelo já definido nas etapas anteriores.
+
+# %%
+proba_oof = cross_val_predict(
+    pipeline_final_config, X_train, y_train, cv=CV, method="predict_proba", n_jobs=N_JOBS
+)[:, 1]
+
+RAZOES_CUSTO = [1, 2, 3, 5, 10]
+RAZAO_BASE = CUSTO_FN / CUSTO_FP
+CORTES = [round(c, 2) for c in np.arange(0.10, 0.90 + 1e-9, 0.05)]
+
+
+def avaliar_corte(corte: float, y_real, escores) -> dict:
+    pred = (escores >= corte).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_real, pred, labels=[0, 1]).ravel()
+    linha = {
+        "limiar": corte,
+        "recall": recall_score(y_real, pred, zero_division=0),
+        "precisao": precision_score(y_real, pred, zero_division=0),
+        "f1": f1_score(y_real, pred, zero_division=0),
+        "VP": int(tp), "FP": int(fp), "FN": int(fn), "VN": int(tn),
+        "custo_total": CUSTO_FN * fn + CUSTO_FP * fp,
+    }
+    for razao in RAZOES_CUSTO:
+        linha[f"custo_razao_{razao}"] = razao * fn + fp  # em unidades de "custo de 1 FP"
+    return linha
+
+
+df_limiar = pd.DataFrame([avaliar_corte(c, y_train, proba_oof) for c in CORTES])
+limiar_otimo_custo = float(df_limiar.loc[df_limiar["custo_total"].idxmin(), "limiar"])
+LIMIAR = float(LIMIAR_ESCOLHIDO) if LIMIAR_ESCOLHIDO is not None else limiar_otimo_custo
+if not np.isclose(df_limiar["limiar"], LIMIAR).any():  # corte forçado fora da grade
+    df_limiar = (pd.concat([df_limiar, pd.DataFrame([avaliar_corte(LIMIAR, y_train, proba_oof)])])
+                 .sort_values("limiar").reset_index(drop=True))
+df_limiar["escolhido"] = np.isclose(df_limiar["limiar"], LIMIAR)
+salvar_tabela(df_limiar.round(6), "limiar_custo.csv")
+
+linhas_sensib = []
+for razao in RAZOES_CUSTO:
+    otimo = df_limiar.loc[df_limiar[f"custo_razao_{razao}"].idxmin()]
+    linhas_sensib.append({
+        "razao_custo_fn_fp": razao,
+        "limiar_otimo": otimo["limiar"],
+        "custo_minimo": otimo[f"custo_razao_{razao}"],
+        "recall": otimo["recall"],
+        "precisao": otimo["precisao"],
+        "f1": otimo["f1"],
+        "razao_base": np.isclose(razao, RAZAO_BASE),
+    })
+df_sensib_custo = pd.DataFrame(linhas_sensib)
+salvar_tabela(df_sensib_custo.round(6), "limiar_sensibilidade_custo.csv")
+
+print("=== CORTES AVALIADOS (predições fora-da-amostra no treino) ===")
+print(df_limiar[["limiar", "recall", "precisao", "f1", "VP", "FP", "FN", "custo_total", "escolhido"]]
+      .round(4).to_string(index=False))
+print("\n=== SENSIBILIDADE À RAZÃO DE CUSTO FN:FP ===")
+print(df_sensib_custo.round(4).to_string(index=False))
+print(f"\nCorte que minimiza o custo na razão-base {RAZAO_BASE:g}:1 = {limiar_otimo_custo:.2f}")
+if LIMIAR_ESCOLHIDO is not None and not np.isclose(LIMIAR, limiar_otimo_custo):
+    print(f"ATENÇÃO: o grupo forçou LIMIAR_ESCOLHIDO = {LIMIAR:.2f}.")
+print(f"Corte de decisão do modelo de produção: {LIMIAR:.2f}")
+
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(16, 5.5))
+axes[0].plot(df_limiar["limiar"], df_limiar["recall"], marker="o", label="Recall (caloteiros detectados)")
+axes[0].plot(df_limiar["limiar"], df_limiar["precisao"], marker="s", label="Precisão (acerto ao acusar)")
+axes[0].plot(df_limiar["limiar"], df_limiar["f1"], marker="^", linestyle="--", label="F1")
+axes[0].axvline(LIMIAR, color="black", linestyle=":", label=f"Corte escolhido ({LIMIAR:.2f})")
+axes[0].set_title("Recall x Precisão por corte (CV no treino)", fontsize=12, fontweight="bold")
+axes[0].set_xlabel("Corte de decisão (escore >= corte => risco)")
+axes[0].set_ylabel("Valor")
+axes[0].set_ylim(0, 1)
+axes[0].legend()
+
+positivos = int(y_train.sum())
+for razao in RAZOES_CUSTO:
+    # Custo relativo a não usar modelo (ninguém marcado como risco: todos os caloteiros passam)
+    relativo = df_limiar[f"custo_razao_{razao}"] / (razao * positivos)
+    destaque = np.isclose(razao, RAZAO_BASE)
+    axes[1].plot(df_limiar["limiar"], relativo, marker="o", markersize=3,
+                 linewidth=2.5 if destaque else 1.2,
+                 label=f"{razao}:1" + (" (hipótese-base)" if destaque else ""))
+    i_min = relativo.idxmin()
+    axes[1].scatter(df_limiar.loc[i_min, "limiar"], relativo[i_min], color="black", zorder=5, s=25)
+axes[1].axhline(1.0, color="gray", linestyle="--", linewidth=1)
+axes[1].set_title("Custo total relativo ao 'chute' (ponto = corte ótimo)", fontsize=12, fontweight="bold")
+axes[1].set_xlabel("Corte de decisão")
+axes[1].set_ylabel("Custo / custo de não usar o modelo")
+axes[1].legend(title="Razão custo FN:FP")
+plt.tight_layout()
+salvar_figura(fig, "curva_cortes.png")
+
+# %%
+def br(valor: float, casas: int = 2) -> str:
+    """Número com vírgula decimal (textos para o negócio)."""
+    return f"{valor:.{casas}f}".replace(".", ",")
+
+
+def descrever_corte(linha: pd.Series) -> str:
+    return (f"recall {linha['recall']:.0%}, precisão {linha['precisao']:.0%}, "
+            f"{int(linha['FN'])} caloteiros deixados passar e {int(linha['FP'])} bons pagadores incomodados")
+
+
+linha_escolhida = df_limiar[df_limiar["escolhido"]].iloc[0]
+vizinhos = df_limiar[np.isclose(df_limiar["limiar"], LIMIAR - 0.10) | np.isclose(df_limiar["limiar"], LIMIAR + 0.10)]
+print(
+    f"Para o negócio (validação cruzada no treino, {len(y_train)} clientes):\n"
+    f"- Com o corte {br(LIMIAR)}, o modelo avisa {linha_escolhida['recall']:.0%} dos clientes que "
+    f"de fato atrasam; de cada 10 clientes marcados como risco, {br(10 * linha_escolhida['precisao'], 1)} "
+    f"atrasam de verdade.\n"
+    f"- Em números: {int(linha_escolhida['VP'])} caloteiros detectados, {int(linha_escolhida['FN'])} "
+    f"deixados passar e {int(linha_escolhida['FP'])} bons pagadores incomodados.\n"
+    + "".join(f"- Para comparação, no corte {br(v['limiar'])}: {descrever_corte(v)}.\n"
+              for _, v in vizinhos.iterrows())
+    + f"- Baixar o corte detecta mais caloteiros, mas incomoda mais bons pagadores; subir o corte faz o "
+    f"contrário. O corte escolhido é o de menor custo total supondo que deixar passar um caloteiro "
+    f"custa {RAZAO_BASE:g} vezes mais que incomodar um bom pagador (hipótese a validar com a área de "
+    f"crédito; ver a tabela de sensibilidade)."
+)
+
+# %% [markdown]
+# ---
+# ## 7. Avaliação final no teste
 # Só depois de todas as escolhas o conjunto de teste é usado, uma única vez.
 
 # %%
 pipeline_vencedor = clone(pipeline_final_config).fit(X_train, y_train)
-LIMIAR = 0.5
 proba_teste = pipeline_vencedor.predict_proba(X_test)[:, 1]
 y_pred = (proba_teste >= LIMIAR).astype(int)
 tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
