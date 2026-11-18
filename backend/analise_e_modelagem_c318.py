@@ -1195,8 +1195,9 @@ bordas = []
 for nome, grade in GRADES.items():
     for chave, valores in grade.items():
         escolhido = melhores_parametros[nome][chave]
-        # None (sem limite) já é o extremo possível, não conta como borda
-        if len(valores) > 1 and escolhido is not None and escolhido in (valores[0], valores[-1]):
+        # Só hiperparâmetros numéricos; None (sem limite) já é o extremo possível
+        numerico = isinstance(escolhido, (int, float)) and not isinstance(escolhido, bool)
+        if len(valores) > 1 and numerico and escolhido in (valores[0], valores[-1]):
             bordas.append(f"{nome}: {chave.replace('classificador__', '')} = {escolhido}")
 print("- Melhor valor na borda da grade (valores além dela não testados): "
       + ("; ".join(bordas) if bordas else "nenhum."))
