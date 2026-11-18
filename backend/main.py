@@ -238,6 +238,30 @@ class MetricasModeloOutput(BaseModel):
     f1_score: float
     matriz_confusao: Dict[str, int]
     observacao_c318: str
+    # Campos opcionais lidos do artefato: null quando o artefato não os traz (nunca inventados)
+    roc_auc: Optional[float] = Field(None, description="ROC-AUC no conjunto de teste.")
+    pr_auc: Optional[float] = Field(None, description="PR-AUC (precisão média) no conjunto de teste.")
+    roc_auc_chute: Optional[float] = Field(
+        None, description="ROC-AUC do modelo de referência (chute) no mesmo teste."
+    )
+    roc_auc_cv_treino: Optional[float] = Field(
+        None, description="ROC-AUC média do modelo final na validação cruzada do treino."
+    )
+    modelo: Optional[str] = Field(None, description="Nome do modelo vencedor (metadados.modelo).")
+    hiperparametros: Optional[Dict[str, Any]] = Field(
+        None, description="Hiperparâmetros do modelo final (metadados.hiperparametros)."
+    )
+    limiar_decisao: Optional[float] = Field(
+        None,
+        description=(
+            "Corte de decisão gravado no artefato (metadados.limiar_decisao). null quando o "
+            "artefato não o traz; nesse caso a API usa o padrão de 0,50."
+        ),
+    )
+    atributos_sensiveis_usados: Optional[bool] = Field(
+        None, description="false: SEX, AGE e MARRIAGE são descartados pelo pipeline."
+    )
+    treinado_em: Optional[str] = Field(None, description="Data/hora do treino (ISO 8601).")
 
 
 def limpar_categorias_uci(df: pd.DataFrame) -> pd.DataFrame:
@@ -290,6 +314,15 @@ CHAVES_METRICAS = [
     "matriz_confusao",
 ]
 CHAVES_MATRIZ = ["VP", "VN", "FP", "FN"]
+# Campos informativos do artefato expostos em /metrics (null quando ausentes)
+CHAVES_METRICAS_OPCIONAIS = ["roc_auc", "pr_auc", "roc_auc_chute", "roc_auc_cv_treino"]
+CHAVES_METADADOS_EXPOSTOS = [
+    "modelo",
+    "hiperparametros",
+    "limiar_decisao",
+    "atributos_sensiveis_usados",
+    "treinado_em",
+]
 LIMIAR_PADRAO = 0.5
 
 
@@ -604,10 +637,17 @@ def obter_metricas_modelo():
     Retorna as métricas de avaliação do modelo sobre o conjunto de teste (Recall,
     Precisão, Acurácia, F1-Score e Matriz de Confusão) para exibição no Front-end.
     Todos os valores são lidos do artefato gerado pelo script de treino.
+    Também traz, quando o artefato os tem, ROC-AUC, PR-AUC, ROC-AUC do chute e da
+    validação cruzada, e os metadados do modelo (nome, hiperparâmetros, corte, uso dos
+    atributos sensíveis e data do treino). Campo ausente no artefato vem null.
     """
     exigir_modelo()
     m = STATE["metricas"]
+    meta = STATE["metadados"]
     return MetricasModeloOutput(
+        # Opcionais: copiados do artefato como estão; ausentes viram null
+        **{chave: m.get(chave) for chave in CHAVES_METRICAS_OPCIONAIS},
+        **{chave: meta.get(chave) for chave in CHAVES_METADADOS_EXPOSTOS},
         algoritmo=m["algoritmo"],
         origem_modelo=STATE["origem"],
         total_amostras_teste=m["total_amostras_teste"],
