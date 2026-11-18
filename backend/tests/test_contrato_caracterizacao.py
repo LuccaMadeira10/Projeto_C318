@@ -8,6 +8,7 @@ permitidas).
 """
 
 import re
+from decimal import ROUND_DOWN, Decimal
 
 import pandas as pd
 import pytest
@@ -75,11 +76,13 @@ def test_predict_payload_do_front(cliente, payload):
 def test_predict_formato_percentual(cliente, payload):
     dados = _prever(cliente, payload)
     prob = dados["probabilidade_atraso"]
-    # probabilidade_atraso é arredondada em 4 casas; o percentual usa o valor bruto.
-    # Aceita-se a diferença de arredondamento de no máximo 0,1 ponto percentual.
-    esperado = float(dados["probabilidade_percentual"].rstrip("%"))
-    assert abs(esperado - prob * 100) <= 0.05 + 1e-9
-    assert dados["probabilidade_percentual"] == f"{esperado:.1f}%"
+    # Passo 3 (T3): probabilidade_atraso e o percentual são TRUNCADOS para baixo (4 e 1 casas),
+    # para o valor exibido ficar do mesmo lado do corte que a classe. Logo, o percentual é
+    # exatamente o truncamento de probabilidade_atraso em 1 casa percentual.
+    assert Decimal(repr(prob)).as_tuple().exponent >= -4
+    esperado = (Decimal(repr(prob)) * 100).quantize(Decimal("0.1"), rounding=ROUND_DOWN)
+    assert dados["probabilidade_percentual"] == f"{esperado}%"
+    assert 0 <= prob * 100 - float(esperado) < 0.1 + 1e-9
 
 
 @pytest.mark.parametrize("payload", [PAYLOAD_FRONT, CENARIO_A, CENARIO_B, PAYLOAD_FRONT_AVANCADO])

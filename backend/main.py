@@ -31,6 +31,7 @@ import logging
 import math
 import os
 from contextlib import asynccontextmanager
+from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -224,9 +225,15 @@ class PredicaoOutput(BaseModel):
     inadimplente_predito: int = Field(
         ..., description="Classe prevista: 1 quando o escore é maior ou igual ao limiar de decisão do artefato."
     )
-    probabilidade_atraso: float = Field(..., description=AVISO_ESCORE)
+    probabilidade_atraso: float = Field(
+        ..., description=AVISO_ESCORE + " Truncado para baixo em 4 casas decimais."
+    )
     probabilidade_percentual: str = Field(
-        ..., description="probabilidade_atraso formatada em percentual (mesma ressalva de calibração)."
+        ...,
+        description=(
+            "Escore em percentual, truncado para baixo em 1 casa decimal (mesma ressalva de "
+            "calibração)."
+        ),
     )
     nivel_risco: str
     cor_indicador: str
@@ -524,6 +531,46 @@ def classificar_risco(prob: float, limiar: float) -> Tuple[int, str, str, str]:
     return 0, "Risco Baixo", "green", RECOMENDACAO_BAIXO
 
 
+CASAS_GARANTIA_LIMIAR = 3
+
+
+def formatar_probabilidade(prob: float) -> Tuple[float, str]:
+    """
+    Valores exibidos do escore: probabilidade_atraso com 4 casas e o percentual com 1 casa,
+    ambos TRUNCADOS para baixo (nunca arredondados para cima). Assim o valor exibido fica do
+    mesmo lado do corte que o escore bruto (ex.: 0,49998 aparece como 0.4999 e "49.9%", e não
+    "50.0%" com classe 0). A classe continua calculada com o escore bruto.
+
+    Usa a representação decimal mais curta do float (repr), e não sua expansão binária
+    exata: 0.57 é truncado para 0.57, e não para 0.5699.
+
+    Limite da garantia: vale para cortes com no máximo 3 casas decimais (o percentual tem 1
+    casa, isto é, 3 casas na probabilidade). Ver ARTEFATO_MODELO.md.
+    """
+    decimal = Decimal(repr(float(prob)))
+    prob_4 = decimal.quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    percentual = (decimal * 100).quantize(Decimal("0.1"), rounding=ROUND_DOWN)
+    return float(prob_4), f"{percentual}%"
+
+
+def casas_decimais(valor: float) -> int:
+    """Número de casas decimais da representação mais curta do float (0.5037 -> 4)."""
+    return max(0, -Decimal(repr(float(valor))).normalize().as_tuple().exponent)
+
+
+def avisar_limiar_com_muitas_casas(limiar: float) -> None:
+    """Registra um aviso (sem bloquear a API) quando o corte tem mais de 3 casas decimais."""
+    if casas_decimais(limiar) > CASAS_GARANTIA_LIMIAR:
+        logger.warning(
+            "limiar_decisao=%s tem mais de %d casas decimais: o escore exibido (truncado em 4 "
+            "casas e o percentual em 1 casa) pode aparecer do lado oposto do corte em relação "
+            "à classe prevista (ex.: corte 0.5037 e escore 0.50375 = classe 1 exibida como "
+            "50.3%%). A classe continua correta. Ver ARTEFATO_MODELO.md.",
+            limiar,
+            CASAS_GARANTIA_LIMIAR,
+        )
+
+
 def inicializar_modelo() -> None:
     """
     Executado no startup: carrega o artefato apontado por MODEL_PATH.
@@ -539,6 +586,7 @@ def inicializar_modelo() -> None:
         logger.error("Falha ao carregar o modelo: %s", exc)
         return
     STATE.update(artefato)
+    avisar_limiar_com_muitas_casas(obter_limiar())
     STATE["origem"] = descrever_origem(caminho, artefato["metadados"])
     logger.info("Modelo carregado: %s", STATE["origem"])
 
@@ -673,11 +721,13 @@ def prever_risco_credito(
 
     # Classe e faixa de risco vêm da mesma regra, com o limiar definido no artefato
     classe_predita, nivel_risco, cor, recomendacao = classificar_risco(prob_calote, obter_limiar())
+    # Exibição truncada para baixo: coerente com a classe (calculada acima com o escore bruto)
+    prob_exibida, percentual_exibido = formatar_probabilidade(prob_calote)
 
     return PredicaoOutput(
         inadimplente_predito=classe_predita,
-        probabilidade_atraso=round(prob_calote, 4),
-        probabilidade_percentual=f"{prob_calote * 100:.1f}%",
+        probabilidade_atraso=prob_exibida,
+        probabilidade_percentual=percentual_exibido,
         nivel_risco=nivel_risco,
         cor_indicador=cor,
         recomendacao_negocio=recomendacao,
