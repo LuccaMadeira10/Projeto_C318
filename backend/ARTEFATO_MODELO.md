@@ -12,15 +12,27 @@ joblib.dump({
         "acuracia": float, "precisao": float,
         "recall_sensibilidade": float, "f1_score": float,
         "matriz_confusao": {"VP": int, "VN": int, "FP": int, "FN": int},
+        # informativas (ignoradas pela API): "roc_auc", "pr_auc", "roc_auc_chute",
+        # "roc_auc_cv_treino"
     },
     "metadados": {            # opcional (padrões abaixo)
         "sklearn_version": str,      # versão usada no treino
         "treinado_em": str,          # data/hora ISO 8601 (UTC)
-        "csv_origem": str,           # CSV usado no treino
+        "csv_origem": str,           # CSV lido no treino (relativo à raiz do projeto, se dentro dele)
         "limiar_decisao": float,     # 0 < limiar < 1; padrão 0.5
+        # informativos (gravados pelo script, ignorados pela API):
+        "atributos_sensiveis_usados": bool,  # False: SEX, AGE e MARRIAGE descartados no ColumnTransformer
+        "modelo": str, "hiperparametros": dict, "custo_fn": float, "custo_fp": float,
+        "n_folds_cv": int, "modo_rapido": bool,
     },
-}, caminho)
+}, caminho, compress=3)
 ```
+
+- As métricas são calculadas **uma única vez** no conjunto de teste (20%, `random_state=42`,
+  `stratify=y`), com o mesmo `limiar_decisao` que a API usa. O limiar é escolhido pelo script
+  (custo dos erros em validação cruzada no treino), nunca olhando o teste.
+- Mesmo sem os atributos sensíveis, o pipeline recebe as 23 colunas: eles são descartados dentro
+  do `ColumnTransformer` (transformador `"descartados"`).
 
 - Chaves adicionais são ignoradas. Um `Pipeline` puro (sem dicionário) é rejeitado.
 - `limiar_decisao` define a classe e a faixa de risco em `POST /predict`:

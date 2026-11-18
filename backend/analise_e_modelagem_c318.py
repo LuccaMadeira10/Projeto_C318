@@ -35,6 +35,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     confusion_matrix,
     f1_score,
     make_scorer,
@@ -816,47 +817,102 @@ print(
 
 # %% [markdown]
 # ---
-# ## 7. Avaliação final no teste
-# Só depois de todas as escolhas o conjunto de teste é usado, uma única vez.
+# ## 7. Avaliação final no teste (uso único)
+# Modelo, hiperparâmetros, atributos e corte já foram escolhidos usando só o treino. Agora o modelo
+# final é treinado em todo o `X_train` e avaliado **uma única vez** nos 6.000 clientes de teste,
+# com o corte escolhido. As métricas gravadas no artefato usam esse mesmo corte, exatamente como a
+# API decide a classe (`classe 1 se escore >= corte`). O "chute" é avaliado no mesmo teste como
+# referência.
 
 # %%
-pipeline_vencedor = clone(pipeline_final_config).fit(X_train, y_train)
-proba_teste = pipeline_vencedor.predict_proba(X_test)[:, 1]
-y_pred = (proba_teste >= LIMIAR).astype(int)
-tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+modelo_final = clone(pipeline_final_config).fit(X_train, y_train)
+chute_final = criar_pipeline(CHUTE).fit(X_train, y_train)
 
+
+def avaliar_no_teste(nome: str, pipeline: Pipeline) -> dict:
+    escores = pipeline.predict_proba(X_test)[:, 1]
+    pred = (escores >= LIMIAR).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_test, pred, labels=[0, 1]).ravel()
+    return {
+        "modelo": nome,
+        "limiar": LIMIAR,
+        "acuracia": accuracy_score(y_test, pred),
+        "precisao": precision_score(y_test, pred, zero_division=0),
+        "recall": recall_score(y_test, pred, zero_division=0),
+        "f1": f1_score(y_test, pred, zero_division=0),
+        "roc_auc": roc_auc_score(y_test, escores),
+        "pr_auc": average_precision_score(y_test, escores),
+        "VP": int(tp), "VN": int(tn), "FP": int(fp), "FN": int(fn),
+    }
+
+
+# ---- Único uso do conjunto de teste para avaliação ----
+aval_final = avaliar_no_teste(f"{modelo_vencedor_nome} (modelo final)", modelo_final)
+aval_chute = avaliar_no_teste(CHUTE, chute_final)
+df_teste = pd.DataFrame([aval_final, aval_chute])
+print(f"=== AVALIAÇÃO FINAL NO TESTE ({len(y_test)} clientes, corte {LIMIAR:.2f}) ===")
+print(df_teste.round(4).to_string(index=False))
+salvar_tabela(df_teste.round(6), "avaliacao_teste.csv")
+
+# ROC-AUC esperada pela CV (mesma configuração) x ROC-AUC obtida no teste
+linha_cv_final = df_sensiveis.iloc[-1] if not usar_sensiveis else df_cv[df_cv["vencedor"]].iloc[0]
+auc_cv_final = float(linha_cv_final["roc_auc_media"])
+print(f"\nROC-AUC na CV do treino: {auc_cv_final:.4f} ± {linha_cv_final['roc_auc_dp']:.4f} | "
+      f"ROC-AUC no teste: {aval_final['roc_auc']:.4f} | chute no teste: {aval_chute['roc_auc']:.4f}")
+
+# %%
+matriz = np.array([[aval_final["VN"], aval_final["FP"]], [aval_final["FN"], aval_final["VP"]]])
+fig, ax = plt.subplots(figsize=(6.5, 5))
+sns.heatmap(
+    matriz, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax,
+    xticklabels=["Pred: Adimplente (0)", "Pred: Inadimplente (1)"],
+    yticklabels=["Real: Adimplente (0)", "Real: Inadimplente (1)"],
+    annot_kws={"size": 14, "weight": "bold"},
+)
+ax.set_title(f"Matriz de confusão no teste ({len(y_test)} clientes)\n"
+             f"{modelo_vencedor_nome}, corte {LIMIAR:.2f}", fontsize=12, fontweight="bold")
+plt.tight_layout()
+salvar_figura(fig, "matriz_confusao_final.png")
+
+# %%
+# Métricas no formato consumido pela rota GET /metrics (mesmo corte usado pela API)
 metricas_producao = {
-    "algoritmo": f"{type(pipeline_vencedor[-1]).__name__} (Pipeline Scikit-Learn)",
+    "algoritmo": f"{type(modelo_final[-1]).__name__} (Pipeline Scikit-Learn)",
     "total_amostras_teste": int(len(y_test)),
-    "acuracia": round(float(accuracy_score(y_test, y_pred)), 4),
-    "precisao": round(float(precision_score(y_test, y_pred, zero_division=0)), 4),
-    "recall_sensibilidade": round(float(recall_score(y_test, y_pred, zero_division=0)), 4),
-    "f1_score": round(float(f1_score(y_test, y_pred, zero_division=0)), 4),
-    "roc_auc": round(float(roc_auc_score(y_test, proba_teste)), 4),
-    "matriz_confusao": {"VP": int(tp), "VN": int(tn), "FP": int(fp), "FN": int(fn)},
+    "acuracia": round(float(aval_final["acuracia"]), 4),
+    "precisao": round(float(aval_final["precisao"]), 4),
+    "recall_sensibilidade": round(float(aval_final["recall"]), 4),
+    "f1_score": round(float(aval_final["f1"]), 4),
+    "matriz_confusao": {k: aval_final[k] for k in ("VP", "VN", "FP", "FN")},
+    # Chaves adicionais (ignoradas pela API, usadas nos testes e na documentação)
+    "roc_auc": round(float(aval_final["roc_auc"]), 4),
+    "pr_auc": round(float(aval_final["pr_auc"]), 4),
+    "roc_auc_chute": round(float(aval_chute["roc_auc"]), 4),
+    "roc_auc_cv_treino": round(auc_cv_final, 4),
 }
-print(metricas_producao)
 
 # Destino do artefato: backend/modelo_credito.joblib, ou a variável MODEL_OUTPUT_PATH.
 # Contrato consumido pela API documentado em ARTEFATO_MODELO.md.
 MODEL_OUTPUT_PATH = Path(os.getenv("MODEL_OUTPUT_PATH") or BASE_DIR / "modelo_credito.joblib")
-csv_origem = exibir_caminho(csv_encontrado)
 
 metadados_artefato = {
     "sklearn_version": sklearn.__version__,
     "treinado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    "csv_origem": csv_origem,
+    "csv_origem": exibir_caminho(csv_encontrado),
     "limiar_decisao": LIMIAR,
     "atributos_sensiveis_usados": usar_sensiveis,
+    "modelo": modelo_vencedor_nome,
+    "hiperparametros": parametros_legiveis(parametros_finais),
+    "custo_fn": CUSTO_FN,
+    "custo_fp": CUSTO_FP,
+    "n_folds_cv": N_FOLDS,
+    "modo_rapido": MODO_RAPIDO,
 }
 
 joblib.dump(
-    {
-        "pipeline": pipeline_vencedor,
-        "metricas": metricas_producao,
-        "metadados": metadados_artefato,
-    },
+    {"pipeline": modelo_final, "metricas": metricas_producao, "metadados": metadados_artefato},
     MODEL_OUTPUT_PATH,
+    compress=3,
 )
-
-print(f"\n[SUCESSO] Modelo vencedor e métricas de teste exportados para '{exibir_caminho(MODEL_OUTPUT_PATH)}'!")
+salvar_json({"metricas": metricas_producao, "metadados": metadados_artefato}, "avaliacao_teste.json")
+print(f"\n[SUCESSO] Modelo final e métricas de teste exportados para '{exibir_caminho(MODEL_OUTPUT_PATH)}'!")
