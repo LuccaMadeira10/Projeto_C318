@@ -30,6 +30,7 @@ from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -916,3 +917,107 @@ joblib.dump(
 )
 salvar_json({"metricas": metricas_producao, "metadados": metadados_artefato}, "avaliacao_teste.json")
 print(f"\n[SUCESSO] Modelo final e métricas de teste exportados para '{exibir_caminho(MODEL_OUTPUT_PATH)}'!")
+
+# %% [markdown]
+# ---
+# ## 8. O que mais leva ao calote? Importância dos atributos do modelo final
+# - **Importância por permutação (sempre):** embaralha uma variável de cada vez e mede quanto a
+#   ROC-AUC cai. Funciona para qualquer algoritmo e é medida nas colunas originais da entrada.
+#   Usa o conjunto de teste porque é só interpretação: vem depois de todas as escolhas e não
+#   altera o modelo.
+# - **Medida nativa (quando existe):** para árvores, `feature_importances_` (redução média de
+#   impureza), somando as colunas *one-hot* de volta na variável original; para a Regressão
+#   Logística, o módulo dos coeficientes (variáveis numéricas padronizadas). O KNN não tem
+#   medida nativa.
+#
+# Importância indica **associação usada pelo modelo**, não causa: um atraso recente não "causa"
+# o calote, mas é o sinal mais forte de que ele vem aí.
+
+# %%
+N_REPETICOES_PERMUTACAO = 3 if MODO_RAPIDO else 10
+permutacao = permutation_importance(
+    modelo_final, X_test, y_test, scoring="roc_auc",
+    n_repeats=N_REPETICOES_PERMUTACAO, random_state=SEMENTE, n_jobs=N_JOBS,
+)
+variaveis_usadas = [c for c in FEATURE_COLUMNS if usar_sensiveis or c not in ATRIBUTOS_SENSIVEIS]
+
+
+def importancia_nativa(pipeline: Pipeline):
+    """Importância nativa somada por variável original. Retorna (Series, descrição) ou (None, motivo)."""
+    preprocessador = pipeline.named_steps["preprocessador"]
+    classificador = pipeline.named_steps["classificador"]
+    if hasattr(classificador, "feature_importances_"):
+        valores, descricao = classificador.feature_importances_, "feature_importances_ (redução de impureza)"
+    elif hasattr(classificador, "coef_"):
+        valores, descricao = np.abs(classificador.coef_[0]), "|coeficiente| padronizado"
+    else:
+        return None, f"{type(classificador).__name__} não tem medida nativa"
+    categoricas = dict((n, cols) for n, _, cols in preprocessador.transformers_).get("cat", [])
+    originais = []
+    for nome in preprocessador.get_feature_names_out():
+        bloco, coluna = nome.split("__", 1)
+        if bloco == "cat":
+            coluna = next(c for c in categoricas if coluna.startswith(f"{c}_"))
+        originais.append(coluna)
+    return pd.Series(valores).groupby(originais).sum(), descricao
+
+
+serie_nativa, descricao_nativa = importancia_nativa(modelo_final)
+df_importancia = pd.DataFrame({
+    "variavel": FEATURE_COLUMNS,
+    "importancia_permutacao_media": permutacao.importances_mean,
+    "importancia_permutacao_dp": permutacao.importances_std,
+})
+df_importancia = df_importancia[df_importancia["variavel"].isin(variaveis_usadas)].copy()
+df_importancia["importancia_nativa"] = (
+    df_importancia["variavel"].map(serie_nativa) if serie_nativa is not None else np.nan
+)
+df_importancia["medida_nativa"] = descricao_nativa
+df_importancia = df_importancia.sort_values("importancia_permutacao_media", ascending=False)
+df_importancia.insert(0, "posicao_permutacao", range(1, len(df_importancia) + 1))
+if serie_nativa is not None:
+    df_importancia["posicao_nativa"] = df_importancia["importancia_nativa"].rank(ascending=False).astype(int)
+salvar_tabela(df_importancia.round(6), "importancia_atributos.csv")
+
+print(f"=== TOP 10 VARIÁVEIS ({modelo_vencedor_nome}; permutação: queda média de ROC-AUC no teste, "
+      f"{N_REPETICOES_PERMUTACAO} repetições) ===")
+print(df_importancia.head(10).round(4).to_string(index=False))
+
+# %%
+paineis = 2 if serie_nativa is not None else 1
+fig, axes = plt.subplots(1, paineis, figsize=(8 * paineis, 5.5), squeeze=False)
+top_perm = df_importancia.head(10).iloc[::-1]
+axes[0, 0].barh(top_perm["variavel"], top_perm["importancia_permutacao_media"],
+                xerr=top_perm["importancia_permutacao_dp"], color="#3b82f6", edgecolor="black")
+axes[0, 0].set_title("Permutação: queda de ROC-AUC no teste (top 10)", fontsize=12, fontweight="bold")
+axes[0, 0].set_xlabel("Queda média de ROC-AUC ao embaralhar a variável")
+if serie_nativa is not None:
+    top_nat = df_importancia.sort_values("importancia_nativa", ascending=False).head(10).iloc[::-1]
+    axes[0, 1].barh(top_nat["variavel"], top_nat["importancia_nativa"], color="#f59e0b", edgecolor="black")
+    axes[0, 1].set_title(f"Nativa: {descricao_nativa} (top 10)", fontsize=12, fontweight="bold")
+    axes[0, 1].set_xlabel("Importância (soma por variável original)")
+fig.suptitle(f"O que mais pesa na previsão de calote: {modelo_vencedor_nome}", fontsize=13, fontweight="bold")
+plt.tight_layout()
+salvar_figura(fig, "importancia_atributos.png")
+
+# %%
+ranking_perm = df_importancia["variavel"].tolist()
+texto_importancia = (
+    f"Ranking por permutação: {', '.join(ranking_perm[:5])} são as 5 variáveis que mais pesam. "
+    f"A mais importante, {ranking_perm[0]}, derruba a ROC-AUC em "
+    f"{df_importancia['importancia_permutacao_media'].iloc[0]:.3f} quando embaralhada."
+)
+if serie_nativa is not None:
+    ranking_nativo = serie_nativa.sort_values(ascending=False)
+    texto_importancia += (
+        f" Na medida nativa ({descricao_nativa}), a ordem é "
+        f"{', '.join(ranking_nativo.index[:5])}; {ranking_nativo.index[0]} responde por "
+        f"{ranking_nativo.iloc[0] / ranking_nativo.sum():.0%} da importância total."
+    )
+texto_importancia += (
+    " Referência da revisão: PAY_0 em primeiro (cerca de 22%), seguido de PAY_2 a PAY_5. "
+    + ("O resultado confirma PAY_0 como variável mais importante."
+       if ranking_perm[0] == "PAY_0" else
+       f"Aqui a primeira posição por permutação é {ranking_perm[0]}, e não PAY_0.")
+)
+print(texto_importancia)
