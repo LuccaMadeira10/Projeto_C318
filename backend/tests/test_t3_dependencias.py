@@ -17,7 +17,8 @@ INCLUSOES = {
     "requirements-dev.txt": "-r requirements-treino.txt",
 }
 PACOTES_EXTRAS = {
-    "requirements-treino.txt": {"matplotlib", "seaborn"},
+    # jupytext, nbconvert e ipykernel: geração do notebook executado (Passo 2, T8)
+    "requirements-treino.txt": {"matplotlib", "seaborn", "jupytext", "nbconvert", "ipykernel"},
     "requirements-dev.txt": {"pytest", "httpx"},
 }
 

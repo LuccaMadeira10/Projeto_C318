@@ -5,4 +5,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.png
+# Gráficos do script de análise (entregáveis versionados)
+!resultados/*.png
 Revisao_Projeto_C318.pdf

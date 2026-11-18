@@ -3,14 +3,44 @@
 # ## Tema 04: Crédito Consciente (Predição de Inadimplência em Cartão de Crédito)
 # **Docente:** Prof. Ricardo Augusto
 #
-# Este script/notebook implementa o fluxo completo de Ciência de Dados exigido na disciplina **C318**:
-# 1. **Coleta e separação imediata Treino/Teste** (o teste fica guardado até a avaliação final)
-# 2. **Análise Exploratória de Dados (EDA)** (exclusivamente sobre os dados de treino)
-# 3. **Comparação justa de modelos por validação cruzada** (somente no treino)
-# 4. **Exportação do modelo** (`modelo_credito.joblib`) para a API FastAPI.
+# ### Contexto
+# Quem emite cartão de crédito ganha muito ao **antecipar** quais clientes vão atrasar a fatura no
+# próximo mês: dá para agir antes (lembrete, oferta de parcelamento, segurar aumento de limite) em
+# vez de apenas cobrar depois. Usamos a base pública **UCI Default of Credit Card Clients**: 30.000
+# clientes de um banco de Taiwan (abril a setembro de 2005), com limite de crédito, dados
+# demográficos, status de pagamento dos últimos 6 meses, valores das faturas e dos pagamentos. O
+# alvo indica se o cliente atrasou no mês seguinte (cerca de 22% atrasaram).
 #
-# **Regra metodológica central:** nenhuma informação do conjunto de teste influencia a escolha
-# do modelo. O teste é usado uma única vez, no final.
+# ### Perguntas de negócio
+# 1. Com o histórico dos últimos 6 meses, dá para prever quem vai atrasar no próximo mês? Quanto
+#    melhor isso é do que não usar modelo nenhum ("chute")?
+# 2. O que mais leva ao calote?
+# 3. Qual corte de decisão equilibra "deixar passar um caloteiro" e "incomodar um bom pagador"?
+# 4. O modelo precisa de sexo, idade e estado civil para prever bem?
+#
+# ### Tipo de problema
+# **Classificação binária supervisionada** (o modelo aprende com exemplos rotulados de clientes que
+# pagaram ou não pagaram), com **classes desbalanceadas** (22% x 78%). Por isso a acurácia sozinha
+# engana (o "chute" acerta 78% sem identificar nenhum caloteiro); usamos ROC-AUC como critério
+# principal e recall, precisão e F1 da classe "inadimplente" como apoio.
+#
+# ### Roteiro e regra metodológica
+# 1. Separação treino/teste (o teste fica guardado até o fim) · 2. EDA só no treino ·
+# 3. Comparação justa por validação cruzada · 4. Hiperparâmetros com GridSearchCV ·
+# 5. Atributos sensíveis · 6. Custo dos erros e corte · 7. Avaliação final no teste ·
+# 8. Importância dos atributos · 9. Resultados (técnico e negócio) · 10. Limitações.
+#
+# **Nenhuma informação do conjunto de teste influencia a escolha do modelo, dos hiperparâmetros,
+# dos atributos ou do corte.** O teste é usado uma única vez, na etapa 7 (e depois só para
+# interpretar o modelo já escolhido, na etapa 8).
+#
+# ### Como executar (a partir da raiz do projeto)
+# - Script: `python backend/analise_e_modelagem_c318.py` (grava `backend/modelo_credito.joblib`
+#   e as tabelas/gráficos em `resultados/`; cerca de 4 minutos).
+# - Variáveis opcionais: `MODEL_OUTPUT_PATH` (destino do artefato), `C318_RESULTADOS_DIR`
+#   (destino dos resultados), `C318_CSV_PATH` (outro CSV), `C318_MODO_RAPIDO=1` (grades mínimas e
+#   3 folds, para testes), `C318_N_JOBS` (paralelismo; padrão -1).
+# - Notebook: gerado a partir deste arquivo (fonte única), ver `notebooks/`.
 
 # %%
 import json
@@ -150,12 +180,17 @@ CSV_PATHS = [
     BASE_DIR / "data" / "UCI_Credit_Card.csv",
 ]
 
-csv_encontrado = next((p for p in CSV_PATHS if p.exists()), None)
-if not csv_encontrado:
-    raise FileNotFoundError(
-        "Arquivo 'UCI_Credit_Card.csv' não encontrado. Locais procurados: "
-        + ", ".join(str(p) for p in CSV_PATHS)
-    )
+if os.getenv("C318_CSV_PATH"):  # caminho alternativo (usado pelo teste de vazamento)
+    csv_encontrado = Path(os.environ["C318_CSV_PATH"]).resolve()
+    if not csv_encontrado.is_file():
+        raise FileNotFoundError(f"C318_CSV_PATH aponta para um arquivo inexistente: {csv_encontrado}")
+else:
+    csv_encontrado = next((p for p in CSV_PATHS if p.exists()), None)
+    if not csv_encontrado:
+        raise FileNotFoundError(
+            "Arquivo 'UCI_Credit_Card.csv' não encontrado. Locais procurados: "
+            + ", ".join(str(p) for p in CSV_PATHS)
+        )
 
 df_bruto = pd.read_csv(csv_encontrado)
 print(f"Dataset carregado de: {exibir_caminho(csv_encontrado)}")
@@ -198,10 +233,14 @@ print(f"Conjunto de Teste Isolado: {X_test.shape[0]} clientes (Inadimplência: {
 # %% [markdown]
 # ---
 # ## 2. Análise Exploratória de Dados (EDA) sobre o Conjunto de Treinamento
-# A seguir, investigamos três perguntas exploratórias fundamentais para o negócio:
+# Toda a EDA usa **somente os 24.000 clientes de treino**. Perguntas exploratórias:
 # 1. Qual é o grau de desbalanceamento da variável alvo $y$?
 # 2. Como o status de pagamento do mês mais recente (`PAY_0`) impacta a probabilidade de inadimplência?
 # 3. Clientes com menores limites de crédito (`LIMIT_BAL`) apresentam maior taxa de atraso?
+# 4. Quais variáveis se correlacionam com o atraso?
+# 5. O histórico de atrasos dos outros meses (`PAY_2` a `PAY_6`) conta a mesma história?
+#    (A base não tem `PAY_1`: o mês mais recente chama-se `PAY_0`.)
+# 6. Quem usa mais do limite atrasa mais?
 
 # %%
 # Criamos um DataFrame combinando X_train e y_train apenas para gerar as visualizações da EDA
@@ -256,6 +295,81 @@ axes[2].set_ylabel("Limite Concedido (NT$)")
 
 plt.tight_layout()
 salvar_figura(fig, "eda_resumo.png")
+
+# %%
+# 4. Correlação (Pearson) entre as variáveis e com o alvo, somente no treino
+correlacao = df_eda.corr(numeric_only=True)
+corr_alvo = correlacao["Inadimplente"].drop("Inadimplente").sort_values()
+
+fig, axes = plt.subplots(1, 2, figsize=(20, 8), gridspec_kw={"width_ratios": [1.6, 1]})
+sns.heatmap(correlacao, cmap="RdBu_r", center=0, vmin=-1, vmax=1, square=True,
+            cbar_kws={"shrink": 0.7}, ax=axes[0])
+axes[0].set_title("Matriz de correlação (treino), incluindo o alvo", fontsize=12, fontweight="bold")
+axes[1].barh(corr_alvo.index, corr_alvo.values,
+             color=["#ef4444" if v > 0 else "#3b82f6" for v in corr_alvo.values], edgecolor="black")
+axes[1].axvline(0, color="black", linewidth=0.8)
+axes[1].set_title("Correlação de cada variável com o atraso", fontsize=12, fontweight="bold")
+axes[1].set_xlabel("Correlação de Pearson com Inadimplente")
+plt.tight_layout()
+salvar_figura(fig, "eda_correlacao.png")
+print("Maiores correlações (em módulo) com o atraso:")
+print(corr_alvo.reindex(corr_alvo.abs().sort_values(ascending=False).index).head(8).round(3).to_string())
+
+# %%
+# 5. Distribuição do status de pagamento nos 6 meses e taxa de atraso por status
+COLUNAS_PAY = ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]
+ROTULOS_STATUS = ["-2", "-1", "0", "1", "2", "3+"]
+
+
+def agrupar_status(serie: pd.Series) -> pd.Series:
+    return serie.clip(upper=3).map(lambda v: "3+" if v == 3 else str(int(v)))
+
+
+fig, axes = plt.subplots(2, 3, figsize=(18, 9), sharey=True)
+for ax, coluna in zip(axes.ravel(), COLUNAS_PAY):
+    status = agrupar_status(df_eda[coluna])
+    freq = status.value_counts(normalize=True).reindex(ROTULOS_STATUS, fill_value=0) * 100
+    taxa = df_eda.groupby(status)["Inadimplente"].mean().reindex(ROTULOS_STATUS) * 100
+    ax.bar(ROTULOS_STATUS, freq.values, color="#94a3b8", edgecolor="black", label="% de clientes")
+    ax.set_title(coluna, fontsize=12, fontweight="bold")
+    ax.set_xlabel("Status (-2/-1 = sem uso/em dia, 0 = rotativo, 1..3+ = meses de atraso)")
+    ax2 = ax.twinx()
+    ax2.plot(ROTULOS_STATUS, taxa.values, color="#ef4444", marker="o", linewidth=2, label="taxa de atraso (%)")
+    ax2.set_ylim(0, 100)
+    ax2.set_ylabel("Taxa de atraso (%)", color="#ef4444")
+axes[0, 0].set_ylabel("% de clientes")
+axes[1, 0].set_ylabel("% de clientes")
+fig.suptitle("Status de pagamento nos 6 meses (barras) e taxa de atraso no mês seguinte (linha)",
+             fontsize=13, fontweight="bold")
+plt.tight_layout()
+salvar_figura(fig, "eda_status_pagamento.png")
+taxa_atrasado = df_eda.loc[df_eda["PAY_0"] >= 1, "Inadimplente"].mean()
+taxa_em_dia = df_eda.loc[df_eda["PAY_0"] <= 0, "Inadimplente"].mean()
+print(f"Taxa de atraso no mês seguinte: {taxa_atrasado:.1%} entre quem já está atrasado em PAY_0 "
+      f"(>= 1 mês) x {taxa_em_dia:.1%} entre quem está em dia ou no rotativo.")
+
+# %%
+# 6. Uso do limite (fatura mais recente / limite) e taxa de atraso
+uso_limite = df_eda["BILL_AMT1"] / df_eda["LIMIT_BAL"]
+faixas_uso = pd.cut(uso_limite, bins=[-np.inf, 0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0, np.inf],
+                    labels=["<= 0", "0-10%", "10-30%", "30-50%", "50-70%", "70-90%", "90-100%", "> 100%"])
+resumo_uso = df_eda.groupby(faixas_uso, observed=False)["Inadimplente"].agg(["mean", "size"])
+
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.bar(resumo_uso.index.astype(str), resumo_uso["mean"] * 100, color="#8b5cf6", edgecolor="black")
+for i, (taxa, n) in enumerate(zip(resumo_uso["mean"], resumo_uso["size"])):
+    ax.text(i, taxa * 100 + 0.8, f"{taxa:.0%}\n(n={n})", ha="center", fontsize=9)
+ax.axhline(taxa_media_treino, color="red", linestyle="--", label=f"Média no treino ({taxa_media_treino:.1f}%)")
+ax.set_title("Uso do limite (BILL_AMT1 / LIMIT_BAL) x taxa de atraso no mês seguinte",
+             fontsize=12, fontweight="bold")
+ax.set_xlabel("Faixa de uso do limite na fatura mais recente")
+ax.set_ylabel("Taxa de atraso (%)")
+ax.set_ylim(0, max(resumo_uso["mean"]) * 100 + 10)
+ax.legend()
+plt.tight_layout()
+salvar_figura(fig, "eda_uso_limite.png")
+print((resumo_uso.rename(columns={"mean": "taxa_atraso", "size": "clientes"})
+       .assign(taxa_atraso=lambda d: d["taxa_atraso"].round(3))).to_string())
 
 # %% [markdown]
 # ---
@@ -528,6 +642,36 @@ if MODELO_ESCOLHIDO and MODELO_ESCOLHIDO != vencedor_regra:
     print(f"ATENÇÃO: o grupo forçou MODELO_ESCOLHIDO = {MODELO_ESCOLHIDO} (a regra indicaria {vencedor_regra}).")
 print(f"Modelo vencedor: {modelo_vencedor_nome} {parametros_legiveis(melhores_parametros[modelo_vencedor_nome])}")
 salvar_tabela(df_cv.round(6), "comparacao_modelos_cv.csv")
+
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(17, 5.5))
+posicoes = np.arange(len(MODELOS))
+inicial = df_cv_inicial.set_index("modelo").loc[MODELOS]
+final = df_cv.set_index("modelo").loc[MODELOS]
+axes[0].bar(posicoes - 0.2, inicial["roc_auc_media"], 0.4, yerr=inicial["roc_auc_dp"],
+            color="#cbd5e1", edgecolor="black", capsize=4, label="Configuração inicial")
+axes[0].bar(posicoes + 0.2, final["roc_auc_media"], 0.4, yerr=final["roc_auc_dp"],
+            color="#3b82f6", edgecolor="black", capsize=4, label="Após GridSearchCV")
+for x, v in zip(posicoes + 0.2, final["roc_auc_media"]):
+    axes[0].text(x, v + 0.012, f"{v:.3f}", ha="center", fontsize=9, fontweight="bold")
+axes[0].axhline(0.5, color="gray", linestyle="--", linewidth=1)
+axes[0].set_xticks(posicoes, MODELOS, rotation=12)
+axes[0].set_ylim(0.4, 0.85)
+axes[0].set_ylabel("ROC-AUC média na CV (± 1 dp)")
+axes[0].set_title(f"ROC-AUC na validação cruzada ({N_FOLDS} folds, só treino)", fontsize=12, fontweight="bold")
+axes[0].legend(loc="lower right")
+largura = 0.27
+for i, (metrica, cor) in enumerate([("recall", "#10b981"), ("precisao", "#f59e0b"), ("f1", "#6366f1")]):
+    axes[1].bar(posicoes + (i - 1) * largura, final[f"{metrica}_media"], largura,
+                yerr=final[f"{metrica}_dp"], color=cor, edgecolor="black", capsize=3,
+                label={"recall": "Recall", "precisao": "Precisão", "f1": "F1"}[metrica])
+axes[1].set_xticks(posicoes, MODELOS, rotation=12)
+axes[1].set_ylim(0, 1)
+axes[1].set_title("Recall, precisão e F1 da classe 1 (corte 0,50, após GridSearchCV)",
+                  fontsize=12, fontweight="bold")
+axes[1].legend()
+plt.tight_layout()
+salvar_figura(fig, "comparacao_modelos_cv.png")
 
 resumo_hiperparametros = {
     "modo_rapido": MODO_RAPIDO,
@@ -1021,3 +1165,91 @@ texto_importancia += (
        f"Aqui a primeira posição por permutação é {ranking_perm[0]}, e não PAY_0.")
 )
 print(texto_importancia)
+
+# %% [markdown]
+# ---
+# ## 9. Resultados para o time técnico
+# Resumo gerado a partir dos números calculados acima (nada escrito à mão).
+
+# %%
+linha_vencedor_cv = df_cv[df_cv["vencedor"]].iloc[0]
+print("Comparação na validação cruzada (só treino, melhores hiperparâmetros):")
+print(df_cv[["modelo", "roc_auc_media", "roc_auc_dp", "pr_auc_media", "recall_media", "precisao_media",
+             "f1_media", "melhores_parametros"]].round(4).to_string(index=False))
+print(
+    f"\n- Vencedor: {modelo_vencedor_nome} ({justificativa_vencedor})\n"
+    f"- Hiperparâmetros finais: {parametros_legiveis(parametros_finais)} "
+    f"(atributos sensíveis usados: {usar_sensiveis}).\n"
+    f"- Corte de decisão: {LIMIAR:.2f} (menor custo na razão FN:FP = {RAZAO_BASE:g}:1, hipótese didática).\n"
+    f"- Teste (uso único, {len(y_test)} clientes): ROC-AUC {aval_final['roc_auc']:.4f} "
+    f"(CV: {auc_cv_final:.4f}; chute: {aval_chute['roc_auc']:.4f}), recall {aval_final['recall']:.4f}, "
+    f"precisão {aval_final['precisao']:.4f}, F1 {aval_final['f1']:.4f}, acurácia {aval_final['acuracia']:.4f}.\n"
+    f"- A ROC-AUC do teste ficou {aval_final['roc_auc'] - auc_cv_final:+.4f} em relação à CV: "
+    + ("dentro de 2 desvios-padrão da CV, ou seja, a estimativa feita só com o treino era confiável."
+       if abs(aval_final['roc_auc'] - auc_cv_final) <= 2 * linha_cv_final['roc_auc_dp'] else
+       "fora de 2 desvios-padrão da CV; vale investigar diferença entre treino e teste.")
+    + f"\n- {texto_importancia}"
+)
+
+bordas = []
+for nome, grade in GRADES.items():
+    for chave, valores in grade.items():
+        escolhido = melhores_parametros[nome][chave]
+        # None (sem limite) já é o extremo possível, não conta como borda
+        if len(valores) > 1 and escolhido is not None and escolhido in (valores[0], valores[-1]):
+            bordas.append(f"{nome}: {chave.replace('classificador__', '')} = {escolhido}")
+print("- Melhor valor na borda da grade (valores além dela não testados): "
+      + ("; ".join(bordas) if bordas else "nenhum."))
+
+# %% [markdown]
+# ---
+# ## 10. Resultados para o negócio
+# Mesma informação, em linguagem de negócio.
+
+# %%
+print(
+    f"1. Dá para prever? Sim, de forma útil mas não perfeita. Ordenando os clientes pelo escore do "
+    f"modelo, um cliente que vai atrasar fica acima de um que vai pagar em {aval_final['roc_auc']:.0%} "
+    f"das comparações (o chute fica em 50%).\n"
+    f"2. Na prática (6.000 clientes que o modelo nunca viu, corte {br(LIMIAR)}): de {aval_final['VP'] + aval_final['FN']} "
+    f"clientes que atrasaram, o modelo avisou {aval_final['VP']} ({aval_final['recall']:.0%}) e deixou passar "
+    f"{aval_final['FN']}. Dos {aval_final['VP'] + aval_final['FP']} clientes marcados como risco, "
+    f"{aval_final['VP']} atrasaram de fato ({aval_final['precisao']:.0%}); os outros {aval_final['FP']} "
+    f"eram bons pagadores incomodados.\n"
+    f"3. O que mais leva ao calote: {ranking_perm[0]} (status de pagamento do mês mais recente) é "
+    f"de longe o sinal mais forte, seguido de {', '.join(ranking_perm[1:4])}. Quem já está atrasando "
+    f"tende a continuar atrasando.\n"
+    f"4. Corte: {br(LIMIAR)}, supondo que deixar passar um caloteiro custa {RAZAO_BASE:g} vezes mais que "
+    f"incomodar um bom pagador. Se a área de crédito estimar outra razão, o corte muda (ver "
+    f"limiar_sensibilidade_custo.csv): quanto mais caro o calote, menor o corte e mais clientes "
+    f"marcados.\n"
+    f"5. Sexo, idade e estado civil: "
+    + ("não são usados pelo modelo de produção; retirá-los quase não muda a qualidade do modelo."
+       if not usar_sensiveis else "são usados pelo modelo de produção (decisão do grupo).")
+)
+
+# %% [markdown]
+# ---
+# ## 11. Limitações
+# - **Desbalanceamento:** só ~22% dos clientes atrasam. Compensamos com `class_weight="balanced"`
+#   e com métricas adequadas (ROC-AUC, recall, precisão, F1), mas a classe minoritária continua
+#   mais difícil de acertar.
+# - **Escore não calibrado:** com `class_weight="balanced"`, o escore do modelo superestima a
+#   chance real de atraso. Ele serve para **ordenar** clientes por risco, não como percentual
+#   literal. Calibrar (por exemplo, `CalibratedClassifierCV`) fica como trabalho futuro.
+# - **Dados de Taiwan, 2005:** outro país, outra moeda, outra época e um único banco. Os padrões
+#   podem não valer para clientes brasileiros de hoje; seria preciso revalidar com dados locais e
+#   monitorar a mudança dos dados ao longo do tempo.
+# - **Atributos sensíveis:** retirar sexo, idade e estado civil não garante um modelo justo, pois
+#   outras variáveis podem carregar parte dessa informação; `EDUCATION` continua no modelo. Não
+#   fizemos auditoria de justiça por grupo.
+# - **Custo hipotético:** a razão 3:1 entre o custo de um falso negativo e o de um falso positivo é
+#   uma hipótese didática, não um dado do banco. O corte ideal depende dessa razão.
+# - **KNN sem balanceamento:** o `KNeighborsClassifier` não aceita `class_weight`; por isso a
+#   comparação principal usa ROC-AUC, que não depende do corte, mas recall, precisão e F1 do KNN
+#   no corte 0,50 não são comparáveis aos dos demais.
+# - **Grade de hiperparâmetros pequena:** para caber em poucos minutos. O resumo técnico (etapa 9)
+#   lista os hiperparâmetros cujo melhor valor ficou na borda da grade; além dela, nada foi testado.
+# - **Uso na API:** o modelo foi treinado com os 6 meses reais de histórico. Quando o formulário
+#   envia só o mês mais recente, a API estima os outros meses, o que reduz a confiança da previsão
+#   (a resposta da API avisa quando isso acontece).
