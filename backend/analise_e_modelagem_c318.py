@@ -13,6 +13,7 @@
 # do modelo. O teste é usado uma única vez, no final.
 
 # %%
+import json
 import os
 import warnings
 from datetime import datetime, timezone
@@ -41,12 +42,21 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 warnings.filterwarnings("ignore")
 sns.set_theme(style="whitegrid", palette="muted")
+
+# ===========================================================================
+# DECISÕES DO GRUPO (troque aqui; a evidência de cada uma é gerada abaixo)
+# ===========================================================================
+# Modelo de produção. None = regra automática: maior ROC-AUC média na validação cruzada;
+# se a diferença para o segundo for menor que 1 desvio-padrão, desempata por F1 e depois
+# por simplicidade. Para forçar: "Regressão Logística", "KNN", "Árvore de Decisão" ou
+# "Random Forest".
+MODELO_ESCOLHIDO = None
 
 # ---------------------------------------------------------------------------
 # Configuração de execução (reprodutível: semente fixa em tudo)
@@ -337,15 +347,191 @@ salvar_tabela(df_cv_inicial.round(6), "comparacao_modelos_cv_inicial.csv")
 
 # %% [markdown]
 # ---
-# ## 4. Escolha do modelo (pela validação cruzada) e avaliação final no teste
-# O vencedor é o modelo de maior ROC-AUC média na validação cruzada. Só depois dessa escolha o
-# conjunto de teste é usado, uma única vez.
+# ## 4. Hiperparâmetros com GridSearchCV (somente treino)
+# Em vez de valores "no olho" (K=15, profundidade 10), cada modelo (exceto o Chute) passa por um
+# `GridSearchCV` pequeno, com **a mesma validação cruzada** e `scoring="roc_auc"`. A tabela
+# completa da grade fica em `resultados/grid_search_resultados.csv`.
+#
+# A configuração inicial da Árvore de Decisão (sem limite de profundidade) mostra por que isso
+# importa: ela decora o treino (AUC de treino 1,00) e generaliza mal na validação.
+#
+# **Regra de escolha do vencedor:** maior ROC-AUC média na CV. Se a diferença para o segundo for
+# menor que 1 desvio-padrão (do líder, entre folds), os modelos são considerados empatados e o
+# desempate é pelo maior F1 e, persistindo o empate (diferença de F1 menor que 1 desvio-padrão),
+# pelo modelo mais simples.
 
 # %%
-modelo_vencedor_nome = df_cv_inicial.sort_values("roc_auc_media", ascending=False).iloc[0]["modelo"]
-print(f"Modelo vencedor na CV: {modelo_vencedor_nome}")
+if MODO_RAPIDO:
+    GRADES = {
+        LOGISTICA: {"classificador__C": [0.01, 1.0]},
+        KNN: {"classificador__n_neighbors": [75], "classificador__weights": ["uniform"]},
+        ARVORE: {"classificador__max_depth": [6], "classificador__min_samples_leaf": [50]},
+        FLORESTA: {
+            "classificador__n_estimators": [100],
+            "classificador__max_depth": [10],
+            "classificador__min_samples_leaf": [10],
+        },
+    }
+else:
+    GRADES = {
+        LOGISTICA: {"classificador__C": [0.001, 0.01, 0.1, 1.0, 10.0]},
+        KNN: {
+            "classificador__n_neighbors": [35, 75, 151, 301],
+            "classificador__weights": ["uniform", "distance"],
+        },
+        ARVORE: {
+            "classificador__max_depth": [4, 6, 8, None],
+            "classificador__min_samples_leaf": [50, 200, 500],
+        },
+        FLORESTA: {
+            "classificador__n_estimators": [200, 500],
+            "classificador__max_depth": [12, None],
+            "classificador__min_samples_leaf": [10, 20, 40],
+        },
+    }
 
-pipeline_vencedor = clone(criar_pipeline(modelo_vencedor_nome)).fit(X_train, y_train)
+# Do mais simples ao mais complexo (critério final de desempate)
+ORDEM_SIMPLICIDADE = [CHUTE, LOGISTICA, ARVORE, KNN, FLORESTA]
+
+
+def executar_grid(pipeline: Pipeline, grade: dict, X_sel, y_sel):
+    """
+    GridSearchCV com a mesma CV e as mesmas métricas; escolhe pela ROC-AUC média.
+    refit=False: a busca só escolhe; o ajuste final acontece depois, explicitamente.
+    Retorna (tabela da grade, melhores parâmetros, linha da melhor combinação).
+    """
+    busca = GridSearchCV(
+        pipeline, grade, scoring=METRICAS_CV, refit=False, cv=CV, n_jobs=N_JOBS, error_score="raise"
+    )
+    busca.fit(X_sel, y_sel)
+    tabela = pd.DataFrame(busca.cv_results_)
+    melhor = int(np.argmin(tabela["rank_test_roc_auc"].to_numpy()))
+    return tabela, dict(tabela.loc[melhor, "params"]), tabela.loc[melhor]
+
+
+def resumir_grid(nome: str, linha: pd.Series) -> dict:
+    """Mesmo formato de resumir_cv, a partir da melhor linha de cv_results_."""
+    resumo = {"modelo": nome}
+    for metrica in METRICAS_CV:
+        valores = np.array([linha[f"split{i}_test_{metrica}"] for i in range(N_FOLDS)])
+        resumo[f"{metrica}_media"] = valores.mean()
+        resumo[f"{metrica}_dp"] = valores.std(ddof=1)
+    resumo["tempo_ajuste_s"] = linha["mean_fit_time"]
+    resumo["tempo_predicao_s"] = linha["mean_score_time"]
+    return resumo
+
+
+def parametros_legiveis(parametros: dict) -> dict:
+    """Remove o prefixo 'classificador__' e converte para tipos JSON."""
+    return {
+        k.replace("classificador__", ""): (v.item() if hasattr(v, "item") else v)
+        for k, v in parametros.items()
+    }
+
+
+tabelas_grid, melhores_parametros, linhas_resumo = [], {}, []
+linhas_resumo.append(resumir_cv(CHUTE, resultados_cv_inicial[CHUTE]))  # Chute não tem hiperparâmetros
+for nome, grade in GRADES.items():
+    print(f"GridSearchCV: {nome} ({int(np.prod([len(v) for v in grade.values()]))} combinações)...")
+    tabela, parametros, melhor_linha = executar_grid(criar_pipeline(nome), grade, X_train, y_train)
+    tabela.insert(0, "modelo", nome)
+    tabelas_grid.append(tabela)
+    melhores_parametros[nome] = parametros
+    linhas_resumo.append(resumir_grid(nome, melhor_linha))
+    print(f"   melhor: {parametros_legiveis(parametros)}  ROC-AUC = {melhor_linha['mean_test_roc_auc']:.4f}")
+
+colunas_grid = (["modelo", "params"] + [f"mean_test_{m}" for m in METRICAS_CV]
+                + [f"std_test_{m}" for m in METRICAS_CV] + ["rank_test_roc_auc", "mean_fit_time"])
+df_grid = pd.concat(tabelas_grid, ignore_index=True)[colunas_grid]
+df_grid["params"] = df_grid["params"].map(lambda p: str(parametros_legiveis(p)))
+print("\n=== GRADE COMPLETA (ROC-AUC média na CV) ===")
+print(df_grid[["modelo", "params", "mean_test_roc_auc", "std_test_roc_auc", "rank_test_roc_auc"]]
+      .round(4).to_string(index=False))
+salvar_tabela(df_grid.round(6), "grid_search_resultados.csv")
+
+df_cv = pd.DataFrame(linhas_resumo).drop(columns="roc_auc_treino_media", errors="ignore")
+df_cv["melhores_parametros"] = df_cv["modelo"].map(
+    lambda n: str(parametros_legiveis(melhores_parametros.get(n, {})))
+)
+
+# %%
+def escolher_vencedor(df: pd.DataFrame):
+    """Aplica a regra de escolha (ver texto acima). Retorna (nome, justificativa)."""
+    candidatos = df[df["modelo"] != CHUTE].sort_values("roc_auc_media", ascending=False)
+    lider, segundo = candidatos.iloc[0], candidatos.iloc[1]
+    margem = lider["roc_auc_media"] - segundo["roc_auc_media"]
+    if margem >= lider["roc_auc_dp"]:
+        return lider["modelo"], (
+            f"{lider['modelo']} tem a maior ROC-AUC média ({lider['roc_auc_media']:.4f}); a diferença "
+            f"para o segundo, {segundo['modelo']} ({segundo['roc_auc_media']:.4f}), é {margem:.4f}, "
+            f"maior que 1 desvio-padrão do líder ({lider['roc_auc_dp']:.4f}). Não há empate."
+        )
+    empatados = candidatos[candidatos["roc_auc_media"] > lider["roc_auc_media"] - lider["roc_auc_dp"]]
+    por_f1 = empatados.sort_values("f1_media", ascending=False)
+    melhor_f1, segundo_f1 = por_f1.iloc[0], por_f1.iloc[1]
+    if melhor_f1["f1_media"] - segundo_f1["f1_media"] >= melhor_f1["f1_dp"]:
+        return melhor_f1["modelo"], (
+            f"Empate técnico na ROC-AUC (diferença menor que 1 desvio-padrão) entre "
+            f"{', '.join(empatados['modelo'])}; desempate pelo maior F1: {melhor_f1['modelo']} "
+            f"({melhor_f1['f1_media']:.4f})."
+        )
+    empatados_f1 = por_f1[por_f1["f1_media"] > melhor_f1["f1_media"] - melhor_f1["f1_dp"]]
+    mais_simples = min(empatados_f1["modelo"], key=ORDEM_SIMPLICIDADE.index)
+    return mais_simples, (
+        f"Empate técnico na ROC-AUC e no F1 entre {', '.join(empatados_f1['modelo'])}; "
+        f"desempate pela simplicidade: {mais_simples}."
+    )
+
+
+vencedor_regra, justificativa_vencedor = escolher_vencedor(df_cv)
+modelo_vencedor_nome = MODELO_ESCOLHIDO or vencedor_regra
+df_cv["vencedor"] = df_cv["modelo"] == modelo_vencedor_nome
+
+print(f"\n=== COMPARAÇÃO FINAL NA CV ({N_FOLDS} folds, melhores hiperparâmetros) ===")
+print(df_cv.drop(columns="melhores_parametros").round(4).to_string(index=False))
+print(f"\nRegra automática: {justificativa_vencedor}")
+if MODELO_ESCOLHIDO and MODELO_ESCOLHIDO != vencedor_regra:
+    print(f"ATENÇÃO: o grupo forçou MODELO_ESCOLHIDO = {MODELO_ESCOLHIDO} (a regra indicaria {vencedor_regra}).")
+print(f"Modelo vencedor: {modelo_vencedor_nome} {parametros_legiveis(melhores_parametros[modelo_vencedor_nome])}")
+salvar_tabela(df_cv.round(6), "comparacao_modelos_cv.csv")
+
+resumo_hiperparametros = {
+    "modo_rapido": MODO_RAPIDO,
+    "n_folds": N_FOLDS,
+    "criterio": "roc_auc",
+    "modelos": {
+        nome: {
+            "grade": {k.replace("classificador__", ""): v for k, v in GRADES[nome].items()},
+            "n_combinacoes": int(np.prod([len(v) for v in GRADES[nome].values()])),
+            "melhores_parametros": parametros_legiveis(melhores_parametros[nome]),
+            "roc_auc_media": round(float(df_cv.loc[df_cv["modelo"] == nome, "roc_auc_media"].iloc[0]), 6),
+            "roc_auc_dp": round(float(df_cv.loc[df_cv["modelo"] == nome, "roc_auc_dp"].iloc[0]), 6),
+        }
+        for nome in GRADES
+    },
+    "vencedor": modelo_vencedor_nome,
+    "vencedor_pela_regra": vencedor_regra,
+    "justificativa": justificativa_vencedor,
+}
+
+
+def salvar_json(dados: dict, nome: str) -> None:
+    caminho = RESULTADOS_DIR / nome
+    caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Arquivo salvo em: {exibir_caminho(caminho)}")
+
+
+salvar_json(resumo_hiperparametros, "melhores_hiperparametros.json")
+
+# %% [markdown]
+# ---
+# ## 5. Avaliação final no teste
+# Só depois de todas as escolhas o conjunto de teste é usado, uma única vez.
+
+# %%
+pipeline_vencedor = criar_pipeline(modelo_vencedor_nome).set_params(
+    **melhores_parametros[modelo_vencedor_nome]
+).fit(X_train, y_train)
 LIMIAR = 0.5
 proba_teste = pipeline_vencedor.predict_proba(X_test)[:, 1]
 y_pred = (proba_teste >= LIMIAR).astype(int)
