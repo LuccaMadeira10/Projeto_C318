@@ -25,7 +25,10 @@ Como executar localmente (comandos a partir da pasta backend/):
    python -m pytest -m "not slow"   # sem executar o script de treino
 """
 
+import csv
+import json
 import logging
+import math
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -77,6 +80,19 @@ FEATURE_COLUMNS: List[str] = [
 ]
 
 TARGET_COLUMN = "default.payment.next.month"
+
+# Resultados do script de treino (Passo 2) usados por GET /comparacao-modelos.
+# Pasta padrão: <raiz do projeto>/resultados; sobrescrevível por C318_RESULTADOS_DIR.
+RESULTADOS_DIR_PADRAO = BASE_DIR.parent / "resultados"
+ARQUIVO_COMPARACAO_CV = "comparacao_modelos_cv.csv"
+ARQUIVO_HIPERPARAMETROS = "melhores_hiperparametros.json"
+COLUNAS_METRICAS_CV = [
+    "roc_auc_media", "roc_auc_dp",
+    "pr_auc_media", "pr_auc_dp",
+    "recall_media", "recall_dp",
+    "precisao_media", "precisao_dp",
+    "f1_media", "f1_dp",
+]
 
 # Histórico dos meses 2 a 6: opcional no payload (preenchido automaticamente se ausente)
 CAMPOS_OPCIONAIS: List[str] = (
@@ -262,6 +278,49 @@ class MetricasModeloOutput(BaseModel):
         None, description="false: SEX, AGE e MARRIAGE são descartados pelo pipeline."
     )
     treinado_em: Optional[str] = Field(None, description="Data/hora do treino (ISO 8601).")
+
+
+class MetricaCVOutput(BaseModel):
+    """Uma linha de resultados/comparacao_modelos_cv.csv (validação cruzada, só treino)."""
+
+    modelo: str
+    roc_auc_media: float
+    roc_auc_dp: float
+    pr_auc_media: float
+    pr_auc_dp: float
+    recall_media: float
+    recall_dp: float
+    precisao_media: float
+    precisao_dp: float
+    f1_media: float
+    f1_dp: float
+    vencedor: bool
+    melhores_parametros: Optional[Dict[str, Any]] = Field(
+        None, description="Melhores hiperparâmetros do GridSearch (null para o Chute)."
+    )
+    grade: Optional[Dict[str, List[Any]]] = Field(
+        None, description="Valores testados no GridSearch (null para o Chute)."
+    )
+
+
+class ComparacaoModelosOutput(BaseModel):
+    criterio: Optional[str] = Field(None, description="Métrica usada para escolher o vencedor.")
+    n_folds: Optional[int] = Field(None, description="Número de folds da validação cruzada.")
+    modelos: List[MetricaCVOutput]
+    vencedor: str = Field(..., description="Modelo marcado como vencedor no CSV.")
+    final: Dict[str, Any] = Field(
+        ..., description="Modelo de produção e seus parâmetros (bloco 'final' do JSON)."
+    )
+    modelo_carregado: Optional[str] = Field(
+        None, description="metadados.modelo do artefato carregado na API (null sem modelo)."
+    )
+    coerente_com_modelo_carregado: bool = Field(
+        ...,
+        description=(
+            "true quando o vencedor do CSV, final.modelo do JSON e metadados.modelo do "
+            "artefato carregado são o mesmo modelo."
+        ),
+    )
 
 
 def limpar_categorias_uci(df: pd.DataFrame) -> pd.DataFrame:
@@ -507,7 +566,9 @@ def healthcheck():
         "projeto": "Crédito Consciente - C318 (Inatel)",
         "modelo_ativo": STATE["origem"],
         "modelo_carregado": carregado,
-        "rotas_disponiveis": ["/predict", "/metrics", "/dataset-check", "/docs"],
+        "rotas_disponiveis": [
+            "/predict", "/metrics", "/comparacao-modelos", "/dataset-check", "/docs",
+        ],
     }
 
 
@@ -657,4 +718,145 @@ def obter_metricas_modelo():
         f1_score=m["f1_score"],
         matriz_confusao=m["matriz_confusao"],
         observacao_c318=descrever_observacao(),
+    )
+
+
+class ResultadosIndisponiveisError(Exception):
+    """Arquivo de resultados do Passo 2 ausente, ilegível ou fora do formato esperado."""
+
+
+def pasta_resultados() -> Path:
+    """Pasta dos resultados: variável C318_RESULTADOS_DIR (lida na chamada) ou a padrão."""
+    return Path(os.getenv("C318_RESULTADOS_DIR") or RESULTADOS_DIR_PADRAO)
+
+
+def exibir_resultado(caminho: Path) -> str:
+    """Caminho do arquivo de resultados para mensagens, sem expor caminho absoluto do servidor."""
+    try:
+        return caminho.relative_to(BASE_DIR.parent).as_posix()
+    except ValueError:
+        return f"C318_RESULTADOS_DIR/{caminho.name}"
+
+
+def _exigir_arquivo(caminho: Path) -> None:
+    if not caminho.is_file():
+        raise ResultadosIndisponiveisError(
+            f"arquivo de resultados não encontrado: {exibir_resultado(caminho)}"
+        )
+
+
+def ler_comparacao_cv(caminho: Path) -> List[Dict[str, Any]]:
+    """
+    Lê as métricas de validação cruzada de comparacao_modelos_cv.csv.
+    A coluna melhores_parametros é ignorada de propósito: está no formato de dicionário do
+    Python (aspas simples, None) e não é JSON; os hiperparâmetros vêm do JSON.
+    """
+    _exigir_arquivo(caminho)
+    try:
+        with open(caminho, encoding="utf-8-sig", newline="") as arquivo:
+            linhas = list(csv.DictReader(arquivo))
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise ResultadosIndisponiveisError(
+            f"não foi possível ler {exibir_resultado(caminho)}: {type(exc).__name__}"
+        ) from exc
+    if not linhas:
+        raise ResultadosIndisponiveisError(f"{exibir_resultado(caminho)} não tem modelos")
+    faltantes = [c for c in ["modelo", *COLUNAS_METRICAS_CV, "vencedor"] if c not in linhas[0]]
+    if faltantes:
+        raise ResultadosIndisponiveisError(
+            f"{exibir_resultado(caminho)} sem as colunas {faltantes}"
+        )
+    modelos = []
+    for linha in linhas:
+        try:
+            metricas = {c: float(linha[c]) for c in COLUNAS_METRICAS_CV}
+        except (TypeError, ValueError) as exc:
+            raise ResultadosIndisponiveisError(
+                f"valor não numérico em {exibir_resultado(caminho)} (modelo {linha['modelo']!r})"
+            ) from exc
+        if not all(math.isfinite(v) for v in metricas.values()):
+            raise ResultadosIndisponiveisError(
+                f"valor não finito em {exibir_resultado(caminho)} (modelo {linha['modelo']!r})"
+            )
+        vencedor = (linha["vencedor"] or "").strip().lower()
+        if vencedor not in ("true", "false"):
+            raise ResultadosIndisponiveisError(
+                f"coluna vencedor inválida em {exibir_resultado(caminho)}: {linha['vencedor']!r}"
+            )
+        modelos.append({"modelo": linha["modelo"], **metricas, "vencedor": vencedor == "true"})
+    if sum(m["vencedor"] for m in modelos) != 1:
+        raise ResultadosIndisponiveisError(
+            f"{exibir_resultado(caminho)} deve marcar exatamente um vencedor"
+        )
+    return modelos
+
+
+def ler_hiperparametros(caminho: Path) -> Dict[str, Any]:
+    """Lê melhores_hiperparametros.json (melhores parâmetros, grade e modelo final)."""
+    _exigir_arquivo(caminho)
+    try:
+        with open(caminho, encoding="utf-8") as arquivo:
+            dados = json.load(arquivo)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ResultadosIndisponiveisError(
+            f"não foi possível ler {exibir_resultado(caminho)}: {type(exc).__name__}"
+        ) from exc
+    if (
+        not isinstance(dados, dict)
+        or not isinstance(dados.get("modelos"), dict)
+        or not isinstance(dados.get("final"), dict)
+        or not isinstance(dados["final"].get("modelo"), str)
+    ):
+        raise ResultadosIndisponiveisError(
+            f"{exibir_resultado(caminho)} sem as chaves 'modelos' e 'final.modelo'"
+        )
+    return dados
+
+
+@app.get(
+    "/comparacao-modelos", response_model=ComparacaoModelosOutput, tags=["Avaliação (C318)"]
+)
+def comparar_modelos():
+    """
+    Comparação dos modelos na validação cruzada (só treino), lida dos resultados do script
+    de treino: métricas (média e desvio) de comparacao_modelos_cv.csv e hiperparâmetros
+    (melhores e grade testada) de melhores_hiperparametros.json. O Chute não tem
+    hiperparâmetros (null). coerente_com_modelo_carregado indica se o vencedor do CSV,
+    final.modelo do JSON e o modelo do artefato carregado coincidem.
+
+    Os arquivos são lidos a cada requisição: são pequenos, a rota é chamada poucas vezes e
+    assim a resposta reflete os resultados atuais, sem reiniciar a API. Arquivo ausente ou
+    ilegível: HTTP 503.
+    """
+    pasta = pasta_resultados()
+    try:
+        modelos = ler_comparacao_cv(pasta / ARQUIVO_COMPARACAO_CV)
+        hiper = ler_hiperparametros(pasta / ARQUIVO_HIPERPARAMETROS)
+    except ResultadosIndisponiveisError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Comparação dos modelos indisponível: {exc}. Gere os resultados executando "
+                "'python analise_e_modelagem_c318.py' na pasta backend/ (ou defina "
+                "C318_RESULTADOS_DIR com a pasta dos resultados)."
+            ),
+        )
+
+    for m in modelos:
+        info = hiper["modelos"].get(m["modelo"])
+        m["melhores_parametros"] = info.get("melhores_parametros") if isinstance(info, dict) else None
+        m["grade"] = info.get("grade") if isinstance(info, dict) else None
+
+    vencedor = next(m["modelo"] for m in modelos if m["vencedor"])
+    modelo_carregado = STATE["metadados"].get("modelo") if STATE["pipeline"] is not None else None
+    return ComparacaoModelosOutput(
+        criterio=hiper.get("criterio"),
+        n_folds=hiper.get("n_folds"),
+        modelos=modelos,
+        vencedor=vencedor,
+        final=hiper["final"],
+        modelo_carregado=modelo_carregado,
+        coerente_com_modelo_carregado=(
+            modelo_carregado is not None and vencedor == hiper["final"]["modelo"] == modelo_carregado
+        ),
     )
