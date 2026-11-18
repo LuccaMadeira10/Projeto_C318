@@ -3,19 +3,32 @@ Projeto C318 - Fundamentos de Machine Learning (Inatel)
 Tema 04: Crédito Consciente (Risco de atraso no cartão de crédito)
 Arquivo: main.py (Back-end FastAPI para inferência do modelo Scikit-Learn)
 
-Como executar localmente:
-1. Instale as dependências:
-   pip install fastapi uvicorn scikit-learn pandas numpy joblib pydantic
-2. Coloque o arquivo 'UCI_Credit_Card.csv' na mesma pasta (ou na pasta ../data/)
-3. Execute o servidor:
+A API apenas CARREGA o artefato modelo_credito.joblib gerado pelo script de treino
+(contrato em ARTEFATO_MODELO.md). Ela não treina modelos nem inventa métricas: sem
+artefato válido, /predict e /metrics retornam HTTP 503.
+
+Como executar localmente (comandos a partir da pasta backend/):
+1. Ambiente e dependências (versões fixadas):
+   python -m venv ../.venv
+   ../.venv/Scripts/activate        (Linux/macOS: source ../.venv/bin/activate)
+   pip install -r requirements.txt              # só a API
+   pip install -r requirements-dev.txt          # API + script de treino + testes
+2. Treinar e gerar o artefato (requer data/UCI_Credit_Card.csv):
+   python analise_e_modelagem_c318.py
+3. Executar a API (os caminhos independem do diretório atual):
    uvicorn main:app --reload
-4. Acesse a documentação interativa (Swagger UI) em:
-   http://127.0.0.1:8000/docs
+   # da raiz do projeto: uvicorn main:app --app-dir backend
+   # outro artefato:     defina MODEL_PATH=/caminho/modelo.joblib antes de iniciar
+4. Documentação interativa (Swagger UI): http://127.0.0.1:8000/docs
+5. Testes:
+   python -m pytest                 # suíte completa (inclui os testes slow)
+   python -m pytest -m "not slow"   # sem executar o script de treino
 """
 
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import joblib
@@ -26,12 +39,13 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("credito_consciente")
 
-# Caminhos padrão para o modelo exportado e para o dataset da UCI
-MODEL_PATH_PADRAO = "modelo_credito.joblib"
-CSV_PATHS = [
-    "UCI_Credit_Card.csv",
-    "data/UCI_Credit_Card.csv",
-    "../data/UCI_Credit_Card.csv",
+# Caminhos relativos a este arquivo, independentes do diretório de execução
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH_PADRAO = BASE_DIR / "modelo_credito.joblib"
+CSV_PATHS: List[Path] = [
+    BASE_DIR / "UCI_Credit_Card.csv",
+    BASE_DIR.parent / "data" / "UCI_Credit_Card.csv",
+    BASE_DIR / "data" / "UCI_Credit_Card.csv",
 ]
 
 # As 23 variáveis preditoras (features) exatas do arquivo UCI_Credit_Card.csv
@@ -210,12 +224,20 @@ def limpar_categorias_uci(df: pd.DataFrame) -> pd.DataFrame:
     return df_clean
 
 
-def localizar_csv() -> Optional[str]:
-    """Procura o arquivo UCI_Credit_Card.csv nos caminhos padrão do projeto."""
+def localizar_csv() -> Optional[Path]:
+    """Procura o arquivo UCI_Credit_Card.csv nos caminhos candidatos do projeto."""
     for path in CSV_PATHS:
-        if os.path.exists(path):
+        if path.is_file():
             return path
     return None
+
+
+def caminho_exibicao(path: Path) -> str:
+    """Caminho relativo à raiz do projeto (evita expor o caminho absoluto do servidor)."""
+    try:
+        return path.relative_to(BASE_DIR.parent).as_posix()
+    except ValueError:
+        return str(path)
 
 
 # Estado global em memória. Só é preenchido no startup a partir do artefato gerado
@@ -245,9 +267,9 @@ class ArtefatoInvalidoError(Exception):
     """O artefato do modelo está ausente, ilegível ou fora do contrato esperado."""
 
 
-def caminho_modelo() -> str:
-    """Caminho do artefato, lido da variável MODEL_PATH no momento da chamada."""
-    return os.getenv("MODEL_PATH") or MODEL_PATH_PADRAO
+def caminho_modelo() -> Path:
+    """Caminho do artefato: variável MODEL_PATH (lida no momento da chamada) ou o padrão."""
+    return Path(os.getenv("MODEL_PATH") or MODEL_PATH_PADRAO)
 
 
 def carregar_modelo(caminho) -> Dict[str, Any]:
@@ -384,8 +406,9 @@ def verificar_dataset_uci():
         return {
             "arquivo_encontrado": False,
             "mensagem": (
-                "O arquivo UCI_Credit_Card.csv ainda não foi encontrado na pasta atual. "
-                "Coloque-o na mesma pasta do main.py ou em ./data/UCI_Credit_Card.csv."
+                "O arquivo UCI_Credit_Card.csv não foi encontrado. Locais procurados: "
+                + ", ".join(caminho_exibicao(p) for p in CSV_PATHS)
+                + "."
             ),
             "colunas_esperadas": ["ID"] + FEATURE_COLUMNS + [TARGET_COLUMN],
         }
@@ -399,7 +422,7 @@ def verificar_dataset_uci():
 
         return {
             "arquivo_encontrado": True,
-            "caminho": csv_path,
+            "caminho": caminho_exibicao(csv_path),
             "dataset_valido": len(colunas_faltantes) == 0,
             "total_clientes_linhas": int(df.shape[0]),
             "total_colunas": int(df.shape[1]),
