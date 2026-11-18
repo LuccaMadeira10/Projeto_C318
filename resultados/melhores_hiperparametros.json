@@ -1,0 +1,114 @@
+{
+  "modo_rapido": false,
+  "n_folds": 5,
+  "criterio": "roc_auc",
+  "modelos": {
+    "Regressão Logística": {
+      "grade": {
+        "C": [
+          0.001,
+          0.01,
+          0.1,
+          1.0,
+          10.0
+        ]
+      },
+      "n_combinacoes": 5,
+      "melhores_parametros": {
+        "C": 10.0
+      },
+      "roc_auc_media": 0.727565,
+      "roc_auc_dp": 0.012659
+    },
+    "KNN": {
+      "grade": {
+        "n_neighbors": [
+          35,
+          75,
+          151,
+          301
+        ],
+        "weights": [
+          "uniform",
+          "distance"
+        ]
+      },
+      "n_combinacoes": 8,
+      "melhores_parametros": {
+        "n_neighbors": 301,
+        "weights": "uniform"
+      },
+      "roc_auc_media": 0.759248,
+      "roc_auc_dp": 0.009421
+    },
+    "Árvore de Decisão": {
+      "grade": {
+        "max_depth": [
+          4,
+          6,
+          8,
+          null
+        ],
+        "min_samples_leaf": [
+          50,
+          200,
+          500
+        ]
+      },
+      "n_combinacoes": 12,
+      "melhores_parametros": {
+        "max_depth": 8,
+        "min_samples_leaf": 500
+      },
+      "roc_auc_media": 0.764504,
+      "roc_auc_dp": 0.00599
+    },
+    "Random Forest": {
+      "grade": {
+        "n_estimators": [
+          200,
+          500
+        ],
+        "max_depth": [
+          12,
+          null
+        ],
+        "min_samples_leaf": [
+          10,
+          20,
+          40
+        ]
+      },
+      "n_combinacoes": 12,
+      "melhores_parametros": {
+        "max_depth": null,
+        "min_samples_leaf": 20,
+        "n_estimators": 500
+      },
+      "roc_auc_media": 0.785697,
+      "roc_auc_dp": 0.005328
+    }
+  },
+  "vencedor": "Random Forest",
+  "vencedor_pela_regra": "Random Forest",
+  "justificativa": "Random Forest tem a maior ROC-AUC média (0.7857); a diferença para o segundo, Árvore de Decisão (0.7645), é 0.0212, maior que 1 desvio-padrão do líder (0.0053). Não há empate.",
+  "atributos_sensiveis": {
+    "usados": false,
+    "regra_indicaria_usar": false,
+    "justificativa": "Sem SEX, AGE e MARRIAGE (mesmos hiperparâmetros), a ROC-AUC média na CV passou de 0.7857 para 0.7845 (diferença com - sem: +0.0012); o desvio-padrão entre folds do modelo com os atributos é 0.0053. O F1 passou de 0.5448 para 0.5438. Diferença pareada por fold (com - sem): ROC-AUC 0.0012 ± 0.0009. A queda é menor que 1 desvio-padrão: pela regra padrão, o modelo de produção NÃO usa esses atributos."
+  },
+  "final": {
+    "modelo": "Random Forest",
+    "atributos_sensiveis_usados": false,
+    "parametros": {
+      "max_depth": null,
+      "min_samples_leaf": 20,
+      "n_estimators": 500
+    },
+    "parametros_pipeline": {
+      "classificador__max_depth": null,
+      "classificador__min_samples_leaf": 20,
+      "classificador__n_estimators": 500
+    }
+  }
+}
