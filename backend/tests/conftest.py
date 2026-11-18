@@ -59,6 +59,49 @@ CENARIO_B = {
 }
 
 
+def recomputar_metricas(caminho_artefato, csv=CSV_REAL) -> dict:
+    """
+    Refaz, fora do script, a avaliação gravada no artefato: mesmo split (20% de teste,
+    random_state=42, stratify=y), pipeline do artefato e limiar_decisao dos metadados.
+    """
+    import joblib
+    import pandas as pd
+    from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score, precision_score,
+                                 recall_score, roc_auc_score)
+    from sklearn.model_selection import train_test_split
+
+    import main
+
+    artefato = joblib.load(caminho_artefato)
+    df = main.limpar_categorias_uci(pd.read_csv(csv))
+    X, y = df[main.FEATURE_COLUMNS], df[main.TARGET_COLUMN]
+    _, X_te, _, y_te = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
+    limiar = artefato["metadados"]["limiar_decisao"]
+    escores = artefato["pipeline"].predict_proba(X_te)[:, 1]
+    pred = (escores >= limiar).astype(int)  # mesma regra da API
+    tn, fp, fn, tp = confusion_matrix(y_te, pred, labels=[0, 1]).ravel()
+    return {
+        "artefato": artefato,
+        "total_amostras_teste": len(y_te),
+        "acuracia": accuracy_score(y_te, pred),
+        "precisao": precision_score(y_te, pred, zero_division=0),
+        "recall_sensibilidade": recall_score(y_te, pred, zero_division=0),
+        "f1_score": f1_score(y_te, pred, zero_division=0),
+        "roc_auc": roc_auc_score(y_te, escores),
+        "matriz_confusao": {"VP": int(tp), "VN": int(tn), "FP": int(fp), "FN": int(fn)},
+    }
+
+
+def verificar_metricas_recomputadas(caminho_artefato, csv=CSV_REAL) -> None:
+    """As métricas gravadas no artefato batem com a recomputação (VP/VN/FP/FN exatos)."""
+    r = recomputar_metricas(caminho_artefato, csv)
+    m = r["artefato"]["metricas"]
+    assert m["matriz_confusao"] == r["matriz_confusao"]
+    assert m["total_amostras_teste"] == r["total_amostras_teste"] == 6000
+    for chave in ("acuracia", "precisao", "recall_sensibilidade", "f1_score", "roc_auc"):
+        assert m[chave] == pytest.approx(r[chave], abs=1e-4), chave
+
+
 @pytest.fixture(scope="session")
 def modelo_real() -> Path:
     """

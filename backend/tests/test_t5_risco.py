@@ -12,14 +12,22 @@ LIMIARES = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8]
 COR = {"Risco Baixo": "green", "Risco Moderado": "yellow", "Risco Alto": "red"}
 
 
-def _verificar(prob, limiar, classe, nivel, cor, recomendacao):
+# Respostas da API trazem probabilidade_atraso arredondada em 4 casas, mas a classe e a faixa
+# usam o escore bruto. A até meia unidade da 4ª casa de um corte, as duas leituras podem
+# divergir (ex.: escore 0,49998 é exibido como 0.5 e corretamente classificado como 0).
+TOLERANCIA_ARREDONDAMENTO = 5e-5
+
+
+def _verificar(prob, limiar, classe, nivel, cor, recomendacao, arredondado=False):
     assert classe in (0, 1)
     assert COR[nivel] == cor
     assert isinstance(recomendacao, str) and recomendacao
-    assert (classe == 1) == (prob >= limiar)
     assert (classe == 1) == (nivel == "Risco Alto")
-    if classe == 0:
-        esperado = "Risco Baixo" if prob < min(0.35, limiar) else "Risco Moderado"
+    if not arredondado or abs(prob - limiar) > TOLERANCIA_ARREDONDAMENTO:
+        assert (classe == 1) == (prob >= limiar)
+    corte_moderado = min(0.35, limiar)
+    if classe == 0 and (not arredondado or abs(prob - corte_moderado) > TOLERANCIA_ARREDONDAMENTO):
+        esperado = "Risco Baixo" if prob < corte_moderado else "Risco Moderado"
         assert nivel == esperado
 
 
@@ -75,7 +83,7 @@ def test_predict_classe_coerente_com_faixa(cliente):
         d = resp.json()
         faixas.add(d["nivel_risco"])
         _verificar(d["probabilidade_atraso"], limiar, d["inadimplente_predito"],
-                   d["nivel_risco"], d["cor_indicador"], d["recomendacao_negocio"])
+                   d["nivel_risco"], d["cor_indicador"], d["recomendacao_negocio"], arredondado=True)
     assert faixas == set(COR), f"a amostra deveria cobrir as três faixas: {faixas}"
 
 
@@ -88,5 +96,5 @@ def test_limiar_do_artefato_e_respeitado(monkeypatch, fabrica_artefato, limiar):
         for _ in range(60):
             d = c.post("/predict", json=_payload_aleatorio(rng)).json()
             _verificar(d["probabilidade_atraso"], limiar, d["inadimplente_predito"],
-                       d["nivel_risco"], d["cor_indicador"], d["recomendacao_negocio"])
+                       d["nivel_risco"], d["cor_indicador"], d["recomendacao_negocio"], arredondado=True)
         assert c.post("/predict", json=CENARIO_A).status_code == 200
