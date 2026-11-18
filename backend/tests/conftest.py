@@ -210,25 +210,28 @@ VARIANTES_DEFEITUOSAS = [
 @pytest.fixture
 def fabrica_artefato(tmp_path, _pipelines_pequenos):
     """
-    Retorna uma função criar(variante="valido", limiar=None, metadados=True) que grava
-    um artefato em tmp_path e devolve o caminho. Variantes: "valido" e as listadas em
-    VARIANTES_DEFEITUOSAS.
+    Retorna uma função criar(variante="valido", limiar=None, metadados=True,
+    metadados_extra=None, metricas_extra=None) que grava um artefato em tmp_path e devolve
+    o caminho. Variantes: "valido" e as listadas em VARIANTES_DEFEITUOSAS.
+    metadados_extra e metricas_extra acrescentam chaves (ex.: {"modelo": "KNN"}).
     """
     import joblib
     import sklearn
 
-    def criar(variante: str = "valido", limiar=None, metadados: bool = True) -> Path:
+    def criar(variante: str = "valido", limiar=None, metadados: bool = True,
+              metadados_extra=None, metricas_extra=None) -> Path:
         caminho = tmp_path / f"modelo_{variante}.joblib"
         pipeline, metricas = _pipelines_pequenos[
             "colunas_incompativeis" if variante == "colunas_incompativeis" else "valido"
         ]
-        artefato = {"pipeline": pipeline, "metricas": dict(metricas)}
+        artefato = {"pipeline": pipeline, "metricas": {**metricas, **(metricas_extra or {})}}
         if metadados:
             artefato["metadados"] = {
                 "sklearn_version": sklearn.__version__,
                 "treinado_em": "2026-11-18T00:00:00+00:00",
                 "csv_origem": "data/UCI_Credit_Card.csv",
                 "limiar_decisao": 0.5 if limiar is None else limiar,
+                **(metadados_extra or {}),
             }
         if variante == "ausente":
             return caminho
