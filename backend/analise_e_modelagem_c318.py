@@ -18,7 +18,11 @@
 # %%
 import os
 import warnings
+from datetime import datetime, timezone
+from pathlib import Path
+
 import joblib
+import sklearn
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -50,16 +54,20 @@ sns.set_theme(style="whitegrid", palette="muted")
 # Antes de qualquer exploração profunda ou ajuste estatístico, separamos $20\%$ do conjunto de dados para **Teste** de forma estratificada (`stratify=y`), garantindo a mesma proporção de inadimplentes ($\approx 22,12\%$) em ambos os subconjuntos.
 
 # %%
+# Caminhos relativos a este arquivo (funciona a partir de qualquer diretório atual).
+# Em notebook (sem __file__), usa o diretório atual.
+BASE_DIR = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
 CSV_PATHS = [
-    "UCI_Credit_Card.csv",
-    "data/UCI_Credit_Card.csv",
-    "../data/UCI_Credit_Card.csv",
+    BASE_DIR / "UCI_Credit_Card.csv",
+    BASE_DIR.parent / "data" / "UCI_Credit_Card.csv",
+    BASE_DIR / "data" / "UCI_Credit_Card.csv",
 ]
 
-csv_encontrado = next((p for p in CSV_PATHS if os.path.exists(p)), None)
+csv_encontrado = next((p for p in CSV_PATHS if p.exists()), None)
 if not csv_encontrado:
     raise FileNotFoundError(
-        "Arquivo 'UCI_Credit_Card.csv' não encontrado. Coloque-o na mesma pasta deste script."
+        "Arquivo 'UCI_Credit_Card.csv' não encontrado. Locais procurados: "
+        + ", ".join(str(p) for p in CSV_PATHS)
     )
 
 df_bruto = pd.read_csv(csv_encontrado)
@@ -292,11 +300,26 @@ metricas_producao = {
     },
 }
 
-MODEL_OUTPUT_PATH = "modelo_credito.joblib"
+# Destino do artefato: backend/modelo_credito.joblib, ou a variável MODEL_OUTPUT_PATH.
+# Contrato consumido pela API documentado em ARTEFATO_MODELO.md.
+MODEL_OUTPUT_PATH = Path(os.getenv("MODEL_OUTPUT_PATH") or BASE_DIR / "modelo_credito.joblib")
+try:
+    csv_origem = csv_encontrado.resolve().relative_to(BASE_DIR.parent).as_posix()
+except ValueError:
+    csv_origem = str(csv_encontrado)
+
+metadados_artefato = {
+    "sklearn_version": sklearn.__version__,
+    "treinado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    "csv_origem": csv_origem,
+    "limiar_decisao": 0.5,  # corte usado por predict() nas métricas acima
+}
+
 joblib.dump(
     {
         "pipeline": pipeline_vencedor,
         "metricas": metricas_producao,
+        "metadados": metadados_artefato,
     },
     MODEL_OUTPUT_PATH,
 )
