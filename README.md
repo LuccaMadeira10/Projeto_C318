@@ -1,125 +1,153 @@
-# Projeto_C318
+# Crédito Consciente — Predição de Risco de Inadimplência (C318)
 
+Projeto computacional da disciplina **C318 — Fundamentos de Machine Learning (Tópicos Especiais II)** do **Instituto Nacional de Telecomunicações**.
+
+* **Docente:** Prof. Ricardo Augusto
+* **Equipe:** Gustavo, Isaque, Lucca e Warley
+* **Base de Dados:** *Default of Credit Card Clients* (UCI Machine Learning Repository — $30.000$ clientes)
+
+---
+
+## Documentação do Projeto (`docs/`)
+
+A documentação está organizada na pasta `docs/` seguindo cada etapa do escopo da disciplina:
+
+| Documento | Conteúdo Abordado |
+| :--- | :--- |
+| **[01. Contexto e Perguntas de Negócio](docs/01_contexto_e_perguntas_de_negocio.md)** | Problema de negócio, objetivos (negócio e ciência de dados), enquadramento em ML e respostas escritas às perguntas da proposta com os números reais. |
+| **[02. Coleta, Dados e Modelagem](docs/02_coleta_dados_e_modelagem.md)** | Avaliação da base da UCI (disponibilidade e fonte única), prevenção de *data leakage*, achados da EDA com gráficos, validação cruzada em 5 *folds* (antes e depois do `GridSearchCV`), ablação de variáveis sensíveis, importância de atributos e corte por custo. |
+| **[03. Resultados (Técnico e Negócio)](docs/03_resultados_tecnicos_e_negocio.md)** | Métricas oficiais e Matriz de Confusão no teste ($N = 6.000$), discussão técnica das decisões e tradução prática para gestão de risco. |
+| **[04. Limitações e Próximos Passos](docs/04_limitacoes_e_proximos_passos.md)** | Limitações de dados, hipótese de custo ($3:1$), calibração de escores, hiperparâmetros na borda da grade, evoluções futuras e referências. |
+| **[Artefato do Modelo (`backend/ARTEFATO_MODELO.md`)](backend/ARTEFATO_MODELO.md)** | Especificação técnica do artefato serializado `backend/modelo_credito.joblib`. |
+
+---
+
+## Resumo dos Resultados Oficiais (Conjunto de Teste, $N = 6.000$)
+
+Todos os números abaixo vêm de uma **única fonte de verdade** (`backend/modelo_credito.joblib`, API FastAPI e `resultados/avaliacao_teste.csv`), medidos sobre os $6.000$ clientes de teste ($1.327$ inadimplentes e $4.673$ adimplentes), utilizados **uma única vez**:
+
+| Modelo | Limiar | Acurácia | Precisão | Recall | $F_1$-Score | ROC-AUC | PR-AUC | VP | VN | FP | FN |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Chute (referência)** | $0,50$ | $77,88\%$ | $0,00\%$ | $0,00\%$ | $0,000$ | $0,500$ | $0,221$ | $0$ | $4.673$ | $0$ | $1.327$ |
+| **Random Forest (final)** | $0,50$ | **$76,80\%$** | **$48,05\%$** | **$60,29\%$** | **$0,535$** | **$0,773$** | **$0,549$** | **$800$** | **$3.808$** | **$865$** | **$527$** |
+
+> A análise completa para as equipes técnica e de negócio está em [`docs/03_resultados_tecnicos_e_negocio.md`](docs/03_resultados_negocio_e_tecnico.md).
+
+---
+
+## Arquitetura da Solução
+
+Além dos entregáveis centrais de Ciência de Dados (scripts Python em `backend/`, notebook executado com saídas em `notebooks/` e documentação em `docs/`), o repositório inclui a camada de aplicação (bônus de engenharia):
+
+* **Modelagem (`Scikit-Learn` — `backend/analise_e_modelagem_c318.py` e `notebooks/analise_e_modelagem_c318.ipynb`):** Comparação de 5 modelos (incluindo *baseline* e Árvore de Decisão) por validação cruzada em 5 *folds* exclusivamente no treino, otimização via `GridSearchCV`, exclusão de atributos demográficos sensíveis (`SEX`, `AGE`, `MARRIAGE`) com perda de apenas $0,0012 \pm 0,0009$ na ROC-AUC e definição do ponto de corte ($0,50$) pela função de custo ($3:1$).
+* **Back-end (`FastAPI` — `backend/main.py`):** Carrega estritamente o artefato `backend/modelo_credito.joblib` (retornando HTTP `503` claro se ausente), garante coerência entre classe prevista e faixa de risco e funciona a partir de qualquer diretório de execução.
+* **Front-end Web (`frontend/index.html` e `frontend/app.js`):** Interface web para simulação e visualização dos indicadores consumindo os dados reais da API, sinalizando que sexo, idade e estado civil não são utilizados pelo modelo.
+* **Testes Automatizados (`backend/tests/` e `frontend/tests/`):** Suíte com **89 testes automáticos** validando a API, a consistência entre métricas recalculadas e artefato salvo, e a ausência de *data leakage* (teste de embaralhamento do conjunto de teste).
+
+---
+
+## Como Executar e Testar Localmente
+
+> Ambiente testado em **Python 3.14** (compatível com Python 3.10+). As dependências estão separadas por finalidade com versões fixadas em `backend/requirements*.txt`.
+
+### 1. Criar ambiente virtual e instalar dependências
+
+```bash
+# Criar e ativar o ambiente virtual na raiz do repositório
+python -m venv .venv
+
+# Windows (PowerShell / CMD)
+.venv\Scripts\activate
+
+# Linux / macOS
+source .venv/bin/activate
+
+# Dependências mínimas para rodar a API
+pip install -r backend/requirements.txt
+
+# Dependências adicionais para rodar o pipeline de treino e gerar gráficos
+pip install -r backend/requirements-treino.txt
+
+# Dependências adicionais para rodar os testes automatizados
+pip install -r backend/requirements-dev.txt
 ```
-projeto-c318-credito-consciente/
-│
+
+### 2. Executar o pipeline de modelagem (gera o artefato e a pasta `resultados/`)
+
+```bash
+python backend/analise_e_modelagem_c318.py
+```
+
+### 3. Executar os testes automatizados
+
+```bash
+pytest -c backend/pytest.ini backend/tests
+```
+
+### 4. Iniciar a API FastAPI
+
+A API funciona a partir de qualquer pasta (raiz ou `backend/`):
+
+```bash
+# Executando a partir da raiz do repositório
+uvicorn main:app --app-dir backend --reload
+```
+
+Documentação interativa da API (Swagger UI): `http://127.0.0.1:8000/docs`.
+
+### 5. Abrir o Front-end Web localmente
+
+Com a API em execução, sirva a pasta `frontend/`:
+
+```bash
+python -m http.server 5500 --directory frontend
+```
+
+Acesse no navegador: `http://127.0.0.1:5500`.
+
+---
+
+## Estrutura do Repositório
+
+```text
+.
+├── backend/
+│   ├── tests/                              # Testes automatizados da API e do pipeline de ML
+│   ├── ARTEFATO_MODELO.md                  # Especificação do artefato serializado
+│   ├── analise_e_modelagem_c318.py         # Script de EDA, CV (5 folds), GridSearchCV e teste
+│   ├── main.py                             # API FastAPI (inferência e métricas reais)
+│   ├── modelo_credito.joblib               # Artefato final do modelo Random Forest
+│   ├── pytest.ini                          # Configuração do pytest
+│   ├── requirements.txt                    # Dependências de produção (API)
+│   ├── requirements-treino.txt             # Dependências de treino, EDA e gráficos
+│   └── requirements-dev.txt                # Dependências de desenvolvimento e testes
 ├── data/
-│   └── UCI_Credit_Card.csv          # Base de dados bruta da UCI
-│
-├── notebooks/                       # ENTREGÁVEL 1: Scripts Computacionais
-│   ├── 01_EDA_e_Limpeza.ipynb       # Exploração, gráficos e separação treino/teste
-│   └── 02_Pipeline_Modelagem.ipynb  # Pipeline Scikit-Learn, métricas e exportação do modelo
-│
-├── backend/                         # API para servir o modelo
-│   ├── modelo_credito.joblib        # Pipeline exportado (Scaler + Modelo)
-│   ├── main.py                      # Código FastAPI com rota POST /predict
-│   └── requirements.txt             # fastapi, uvicorn, scikit-learn, pandas, joblib
-│
-├── frontend/                        # Aplicação Web (Deploy na Vercel)
-│   ├── src/                         # Telas React/Next.js + Tailwind CSS
-│   └── package.json
-│
-└── README.md                        # ENTREGÁVEL 2: Documentação 
+│   └── UCI_Credit_Card.csv                 # Base de dados UCI (30.000 clientes)
+├── docs/
+│   ├── img/                                # Imagens auxiliares de documentação
+│   ├── 01_contexto_e_perguntas_negocio.md
+│   ├── 02_coleta_e_modelagem.md
+│   ├── 03_resultados_negocio_e_tecnico.md
+│   └── 04_limitacoes_e_proximos_passos.md
+├── frontend/
+│   ├── tests/                              # Testes do front-end
+│   ├── app.js                              # Lógica de integração com a API FastAPI
+│   └── index.html                          # Interface web do simulador e métricas
+├── notebooks/
+│   └── analise_e_modelagem_c318.ipynb      # Notebook executado com saídas e análises
+├── resultados/
+│   ├── avaliacao_teste.csv / .json         # Métricas oficiais no conjunto de teste
+│   ├── comparacao_modelos_cv_inicial.csv   # CV (5 folds) antes do GridSearchCV
+│   ├── comparacao_modelos_cv.csv / .png    # CV (5 folds) após o GridSearchCV
+│   ├── grid_search_resultados.csv          # Grade completa de hiperparâmetros avaliada
+│   ├── importancia_atributos.csv / .png    # Importância por permutação e nativa
+│   ├── limiar_custo.csv                    # Avaliação de limiares (0,10 a 0,90) no treino OOF
+│   ├── limiar_sensibilidade_custo.csv      # Sensibilidade do limiar às razões 1:1 até 10:1
+│   ├── curva_cortes.png                    # Trade-off Recall x Precisão e custo relativo
+│   ├── sensiveis_com_vs_sem.csv            # Ablação pareada de SEX, AGE e MARRIAGE
+│   ├── melhores_hiperparametros.json       # Hiperparâmetros ótimos por modelo
+│   ├── matriz_confusao_final.png           # Matriz de confusão no teste (N = 6.000)
+│   └── eda_*.png                           # Gráficos da análise exploratória (treino)
+├── .gitignore
+└── README.md                               # Guia técnico e índice do projeto
 ```
-
-# Avaliação Técnica (C318) e Guia Prático de Execução e Testes
-
-## 1. Avaliação do Código e do Modelo de IA para o Projeto C318
-
-Sim, **a sua API e o seu modelo de Machine Learning já estão excelentes e prontos** para atender aos critérios exigidos pelo Prof. Ricardo Augusto na disciplina C318. Abaixo estão os pontos que garantem uma nota alta na avaliação técnica:
-
-1. **Zero Vazamento de Dados (*Data Leakage*):**
-   * O código realiza o `train_test_split(..., test_size=0.20, stratify=y)` **antes** de ajustar o `StandardScaler` e o `OneHotEncoder`.
-   * O uso de `stratify=y` garante que tanto o conjunto de treino ($24.000$ clientes) quanto o conjunto de teste ($6.000$ clientes) mantenham exatamente a mesma proporção original da classe alvo ($\approx 22,12\%$ de inadimplentes).
-2. **Pipeline Oficial do Scikit-Learn (`Pipeline` + `ColumnTransformer`):**
-   * Em vez de aplicar transformações soltas no código, o modelo encapsula o escalonamento de variáveis numéricas (`StandardScaler`) e a codificação de variáveis categóricas (`OneHotEncoder`) dentro de um único objeto `Pipeline`.
-3. **Tratamento do Desbalanceamento de Classes:**
-   * O `RandomForestClassifier` está configurado com `class_weight="balanced"`. Na apresentação para o professor, destaque que essa escolha foi feita porque a Acurácia isolada é enganosa em bases desbalanceadas, e o objetivo de negócio é maximizar o **Recall** ($\text{Recall} = \frac{VP}{VP + FN}$) para reduzir os Falsos Negativos (calotes não previstos).
-4. **Duas Melhorias que Acabei de Incluir no seu `main.py`:**
-   * **Persistência das Métricas Reais:** Na versão anterior, quando o servidor reiniciava e carregava o arquivo `modelo_credito.joblib`, as métricas voltavam para os valores estáticos iniciais. Agora, o `joblib.dump()` salva um dicionário contendo o `pipeline` e as `metricas` calculadas sobre os $6.000$ clientes de teste.
-   * **Preenchimento Inteligente do Histórico (`PAY_2` a `PAY_6`):** Como o formulário simplificado do Front-end envia apenas 8 campos (incluindo o `PAY_0`), ajustei a rota `/predict` para propagar proporcionalmente o status de atraso caso os meses anteriores não sejam informados (`None`), tornando o modelo muito mais sensível aos testes que você fizer na tela.
-
----
-
-## 2. Passo a Passo: Como Rodar o Projeto no seu Computador
-
-### Passo 1: Organizar os Arquivos na Mesma Pasta
-Crie uma pasta para o projeto (por exemplo, `credito-consciente`) e coloque dentro dela os 3 arquivos:
-* `main.py` (o código da API FastAPI atualizado)
-* `UCI_Credit_Card.csv` (o dataset que você enviou)
-* `index.html` (o Front-end do simulador que geramos)
-
-*Observação:* Se já existir um arquivo `modelo_credito.joblib` antigo na pasta, apague-o antes de rodar pela primeira vez para que o `main.py` gere um novo com as métricas reais do seu CSV.
-
-### Passo 2: Criar um Ambiente Virtual e Instalar as Bibliotecas
-Abra o terminal (PowerShell, CMD ou terminal do VS Code) dentro da pasta do projeto e execute:
-
-    # 1. Cria o ambiente virtual (opcional, mas recomendado)
-    python -m venv venv
-
-    # 2. Ativa o ambiente virtual
-    # No Windows (PowerShell/CMD):
-    venv\Scripts\activate
-    # No Linux ou Mac:
-    source venv/bin/activate
-
-    # 3. Instala as dependências necessárias
-    pip install fastapi uvicorn scikit-learn pandas numpy joblib pydantic
-
-### Passo 3: Iniciar o Servidor FastAPI
-Ainda no terminal, execute o comando abaixo:
-
-    uvicorn main:app --reload
-
-**O que vai acontecer no terminal?**
-Na primeira vez que você rodar, verá a mensagem:
-`[C318] Lendo base de dados 'UCI_Credit_Card.csv' e treinando Pipeline Scikit-Learn...`
-Em cerca de $3$ a $5$ segundos, ele treinará a Random Forest com $24.000$ clientes, avaliará nos $6.000$ clientes de teste, salvará o arquivo `modelo_credito.joblib` e exibirá:
-`Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)`
-
----
-
-## 3. Como Testar a API e o Modelo de IA (3 Formas)
-
-### Forma 1: Testar Visualmente pelo Front-end (`index.html`)
-1. Com o terminal rodando o `uvicorn`, basta dar **duplo clique no arquivo `index.html`** para abri-lo no seu navegador (Chrome, Edge, etc.).
-2. No topo da página, você verá o indicador ficar **Verde (`Online`)** conectado em `http://127.0.0.1:8000`.
-3. Clique nas 3 abas no canto superior direito:
-   * **Simulador de Risco:** Altere o campo *Status Pagamento Mês Atual (`PAY_0`)* de `-1 = Pago em dia` para `2 = Atraso de 2 meses` e clique em **Executar Predição de Risco**. Você verá a barra saltar de **Risco Baixo (Verde)** para **Risco Alto (Vermelho)** na hora!
-   * **Métricas do Modelo (UCI):** Exibe os cards com Acurácia, Recall, Precisão, $F_1\text{-Score}$ e a Matriz de Confusão real calculada sobre o seu CSV.
-   * **Validação do Dataset:** Confirma que o `UCI_Credit_Card.csv` possui $30.000$ linhas, $25$ colunas e $\approx 22,12\%$ de taxa de inadimplência.
-
-### Forma 2: Testar pela Documentação Automática do FastAPI (Swagger UI)
-O FastAPI cria uma tela de testes interativa automática (excelente para mostrar ao professor durante as mentorias!):
-1. Abra o navegador e acesse: `http://127.0.0.1:8000/docs`
-2. Clique na rota **`GET /dataset-check`** $\rightarrow$ **Try it out** $\rightarrow$ **Execute** para ver o diagnóstico do CSV.
-3. Clique na rota **`POST /predict`** $\rightarrow$ **Try it out** e teste colando os dois cenários abaixo no corpo da requisição (*Request body*):
-
-**Cenário A — Cliente Bom Pagador (Deve retornar Risco Baixo / Verde):**
-
-    {
-      "LIMIT_BAL": 150000,
-      "SEX": 2,
-      "EDUCATION": 1,
-      "MARRIAGE": 1,
-      "AGE": 38,
-      "PAY_0": -1,
-      "BILL_AMT1": 12000,
-      "PAY_AMT1": 12000
-    }
-
-**Cenário B — Cliente com Atraso Recente e Pagamento Insuficiente (Deve retornar Risco Alto / Vermelho):**
-
-    {
-      "LIMIT_BAL": 30000,
-      "SEX": 1,
-      "EDUCATION": 2,
-      "MARRIAGE": 2,
-      "AGE": 25,
-      "PAY_0": 2,
-      "BILL_AMT1": 29500,
-      "PAY_AMT1": 0
-    }
-
-### Forma 3: E para o Entregável do Jupyter Notebook?
-Lembre-se de que o PDF da disciplina pede os **Scripts Computacionais** (além da apresentação/sistema). Embora o `main.py` já faça todo o treinamento do Pipeline automaticamente, para garantir $100\%$ da nota na rubrica acadêmica vale a pena ter um arquivo `.ipynb` (Jupyter Notebook) com os gráficos da Análise Exploratória (EDA) e a comparação entre 2 ou 3 algoritmos (por exemplo: Regressão Logística vs. KNN vs. Random Forest) justificando por que a Random Forest foi a escolhida para ir para a API.
