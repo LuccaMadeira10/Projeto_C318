@@ -260,18 +260,8 @@
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
                 <div>
-                  <label for="BILL_AMT3" class="block text-[11px] text-slate-400 mb-1">Fatura há 3 meses (<code class="text-blue-400">BILL_AMT3</code>)</label>
-                  <input type="number" id="BILL_AMT3" placeholder="Auto (baseado na fatura 1)"
-                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-                </div>
-                <div>
                   <label for="PAY_AMT2" class="block text-[11px] text-slate-400 mb-1">Valor Pago há 2 meses (<code class="text-blue-400">PAY_AMT2</code>)</label>
                   <input type="number" id="PAY_AMT2" min="0" placeholder="Auto (baseado no pagamento 1)"
-                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
-                </div>
-                <div>
-                  <label for="PAY_AMT3" class="block text-[11px] text-slate-400 mb-1">Valor Pago há 3 meses (<code class="text-blue-400">PAY_AMT3</code>)</label>
-                  <input type="number" id="PAY_AMT3" min="0" placeholder="Auto (baseado no pagamento 1)"
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
               </div>
@@ -287,7 +277,7 @@
 
         <!-- Coluna Direita: Painel de Diagnóstico de IA (5 colunas) -->
         <div class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
-          <div id="resultPanel" class="space-y-5 transition-opacity">
+          <div class="space-y-5">
             <div class="border-b border-slate-800 pb-4 flex items-center justify-between">
               <div>
                 <h2 class="text-base sm:text-lg font-bold text-white">Diagnóstico Preditivo</h2>
@@ -324,7 +314,7 @@
             <!-- Indicadores Financeiros Derivados -->
             <div class="grid grid-cols-2 gap-3">
               <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5">
-                <span class="text-[11px] text-slate-400 block">Comprometimento do Limite</span>
+                <span class="text-[11px] text-slate-400 block"> comprometimento do Limite</span>
                 <span id="indComprometimento" class="text-base font-bold text-slate-200 mt-0.5 block">12.1%</span>
               </div>
               <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5">
@@ -405,7 +395,7 @@
           <div class="lg:col-span-6 bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
             <div>
               <h3 class="text-sm font-bold text-white">Matriz de Confusão — Random Forest (Teste: 6.000 clientes)</h3>
-              <p class="text-xs text-slate-400">Comparação entre a classe verdadeira (y) e a classe predita (ŷ).</p>
+              <p class="text-xs text-slate-400">Comparação entre a classe verdadeira ($y$) e a classe predita ($\hat{y}$).</p>
             </div>
 
             <div class="grid grid-cols-2 gap-3 text-center">
@@ -559,7 +549,6 @@
   <!-- Script da Aplicação -->
   <script>
     let apiOnline = false;
-    let toastTimer = null;
 
     function getApiUrl() {
       return document.getElementById('inputApiUrl').value.trim().replace(/\/$/, '');
@@ -584,10 +573,6 @@
       }
 
       text.textContent = message;
-
-      // Erros ficam até o usuário fechar; sucesso/info somem sozinhos para não cobrir o resultado
-      clearTimeout(toastTimer);
-      if (type !== 'error') toastTimer = setTimeout(hideToast, 5000);
     }
 
     function hideToast() {
@@ -675,8 +660,6 @@
           dot.className = "w-3 h-3 rounded-full bg-emerald-400 shrink-0";
           badge.className = "text-xs font-semibold px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-500/40";
           badge.textContent = "Conectado ao FastAPI";
-          // Lembra o último endereço que funcionou (ex.: porta diferente de 8000)
-          try { localStorage.setItem('apiUrl', url); } catch (e) {}
           if (mostrarNotificacao) {
             showToast(`Conectado com sucesso à API FastAPI (${data.modelo_ativo || 'online'})!`, 'success');
           }
@@ -689,7 +672,7 @@
       apiOnline = false;
       dot.className = "w-3 h-3 rounded-full bg-blue-400 shrink-0";
       badge.className = "text-xs font-semibold px-2 py-0.5 rounded-md bg-blue-950/80 text-blue-300 border border-blue-500/40";
-      badge.textContent = "API desconectada — simulação";
+      badge.textContent = "Modo Demo Integrado (Vercel / Preview)";
       if (mostrarNotificacao) {
         showToast("Servidor local FastAPI não detectado em " + url + ". Usando o motor calibrado integrado no navegador!", "info");
       }
@@ -777,11 +760,15 @@
         PAY_AMT1: parseFloat(document.getElementById('PAY_AMT1').value)
       };
 
-      // Campos avançados opcionais: vazios ficam de fora e a API preenche a partir do mês 1
-      ['PAY_2', 'PAY_3', 'BILL_AMT2', 'BILL_AMT3', 'PAY_AMT2', 'PAY_AMT3'].forEach(id => {
-        const v = document.getElementById(id).value;
-        if (v !== "") payload[id] = Number(v);
-      });
+      // Campos avançados opcionais
+      const pay2 = document.getElementById('PAY_2').value;
+      const pay3 = document.getElementById('PAY_3').value;
+      const bill2 = document.getElementById('BILL_AMT2').value;
+      const pamt2 = document.getElementById('PAY_AMT2').value;
+      if (pay2 !== "") payload.PAY_2 = parseInt(pay2);
+      if (pay3 !== "") payload.PAY_3 = parseInt(pay3);
+      if (bill2 !== "") payload.BILL_AMT2 = parseFloat(bill2);
+      if (pamt2 !== "") payload.PAY_AMT2 = parseFloat(pamt2);
 
       let resultado = null;
       let fonte = "Simulação (sem API)";
@@ -803,9 +790,6 @@
               ? erro.detail.map(d => `${(d.loc || []).slice(-1)[0]}: ${d.msg}`).join('; ')
               : (erro.detail || res.statusText);
             showToast(`A API recusou a predição (HTTP ${res.status}): ${detalhe}`, 'error');
-            // O painel ainda mostra a predição anterior: marca como desatualizada até a próxima predição
-            document.getElementById('resultPanel').classList.add('opacity-50');
-            document.getElementById('riskSubtitle').textContent = "⚠ Resultado anterior — a última predição falhou";
             btn.disabled = false;
             return;
           }
@@ -833,7 +817,6 @@
       const sourceTag = document.getElementById('inferenceSourceTag');
 
       sourceTag.textContent = fonte;
-      document.getElementById('resultPanel').classList.remove('opacity-50');
       document.getElementById('riskSubtitle').textContent = apiOnline
         ? "Classificação Estimada"
         : "⚠ Simulação aproximada — conecte a API para usar o modelo";
@@ -893,7 +876,7 @@
         document.getElementById('mcFP').textContent = m.matriz_confusao.FP;
         document.getElementById('mcFN').textContent = m.matriz_confusao.FN;
         document.getElementById('mcVP').textContent = m.matriz_confusao.VP;
-        showToast(`Métricas sincronizadas com a API — ${m.origem_modelo}`, "success");
+        showToast("Métricas sincronizadas com o arquivo modelo_credito.joblib da API!", "success");
       } catch (e) {
         showToast("Não foi possível consultar /metrics. Valores exibidos são de referência.", "error");
       }
@@ -922,10 +905,6 @@
     }
 
     window.onload = async function () {
-      try {
-        const salvo = localStorage.getItem('apiUrl');
-        if (salvo) document.getElementById('inputApiUrl').value = salvo;
-      } catch (e) {}
       await testApiConnection(false);
       await executarInferencia();
     };
