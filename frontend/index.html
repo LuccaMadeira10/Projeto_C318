@@ -618,6 +618,12 @@
     let estadoAtual = 'desligada';
     let metricasAtuais = null;
     let toastTimer = null;
+
+    // Site publicado usa a API do Render; aberto localmente continua usando 127.0.0.1
+    const API_PRODUCAO = 'https://credito-consciente-api.onrender.com';
+    const SITE_LOCAL = location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(location.hostname);
+    // O plano gratuito do Render "dorme" após 15 min e leva ~50s para acordar: fora do local, espera mais
+    const TEMPO_VERIFICACAO = SITE_LOCAL ? 4000 : 90000;
     const AVISO_SENSIVEL = 'Não são usados pelo modelo; mantidos por compatibilidade da API.';
 
     // Cenários da apresentação (iguais a CENARIO_A e CENARIO_B de backend/tests/conftest.py)
@@ -709,8 +715,12 @@
     /** Consulta GET / e decide o estado: Conectado, API sem modelo ou API desligada. */
     async function verificarApi(notificar = false) {
       let raiz = null;
+      if (!SITE_LOCAL) {
+        definirTexto('apiBadge', 'Conectando...');
+        definirTexto('apiSubtext', 'A API gratuita pode levar até 1 minuto para acordar na primeira visita.');
+      }
       try {
-        const r = await buscarJson('/');
+        const r = await buscarJson('/', {}, TEMPO_VERIFICACAO);
         if (r.ok && r.corpo && typeof r.corpo === 'object') {
           raiz = r.corpo;
           // Lembra o último endereço que respondeu (ex.: API em porta diferente de 8000)
@@ -1075,10 +1085,10 @@
     }
 
     window.onload = async function () {
-      try {
-        const salvo = localStorage.getItem('apiUrl');
-        if (salvo) $('inputApiUrl').value = salvo;
-      } catch (e) {}
+      let salvo = null;
+      try { salvo = localStorage.getItem('apiUrl'); } catch (e) {}
+      if (salvo) $('inputApiUrl').value = salvo;
+      else if (!SITE_LOCAL) $('inputApiUrl').value = API_PRODUCAO;
       limparResultadosDoModelo();
       await verificarApi(false);
     };
