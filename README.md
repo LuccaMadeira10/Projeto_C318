@@ -8,6 +8,25 @@ Projeto computacional da disciplina **C318 — Fundamentos de Machine Learning (
 
 ---
 
+## Aplicação Publicada
+
+| Parte | Endereço |
+|---|---|
+| **Site (Vercel)** | https://credito-consciente.vercel.app |
+| API (Render) | https://credito-consciente-api.onrender.com |
+| Documentação da API (Swagger UI) | https://credito-consciente-api.onrender.com/docs |
+
+> A API está no plano gratuito do Render, que a desliga após 15 minutos sem uso. A primeira visita depois disso leva cerca de 50 segundos enquanto a API "acorda"; o site avisa e espera. Antes de uma apresentação, abra o site com alguns minutos de antecedência.
+
+### Atualizar o deploy
+
+O deploy **não é automático** a cada push:
+
+* **API:** no painel do Render, serviço `credito-consciente-api` → **Manual Deploy → Deploy latest commit**. A configuração do serviço está em [`render.yaml`](render.yaml).
+* **Site:** na pasta `frontend/`, rode `npx vercel deploy --prod` (pede login na Vercel na primeira vez). Aberto localmente, o site continua usando a API em `http://127.0.0.1:8000`.
+
+---
+
 ## Documentação do Projeto (`docs/`)
 
 A documentação está organizada na pasta `docs/` seguindo cada etapa do escopo da disciplina:
