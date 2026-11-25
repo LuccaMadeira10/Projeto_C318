@@ -1,0 +1,37 @@
+{
+  "metricas": {
+    "algoritmo": "RandomForestClassifier (Pipeline Scikit-Learn)",
+    "total_amostras_teste": 6000,
+    "acuracia": 0.768,
+    "precisao": 0.4805,
+    "recall_sensibilidade": 0.6029,
+    "f1_score": 0.5348,
+    "matriz_confusao": {
+      "VP": 800,
+      "VN": 3808,
+      "FP": 865,
+      "FN": 527
+    },
+    "roc_auc": 0.7734,
+    "pr_auc": 0.5486,
+    "roc_auc_chute": 0.5,
+    "roc_auc_cv_treino": 0.7845
+  },
+  "metadados": {
+    "sklearn_version": "1.9.1",
+    "treinado_em": "2026-11-18T19:35:19+00:00",
+    "csv_origem": "data/UCI_Credit_Card.csv",
+    "limiar_decisao": 0.5,
+    "atributos_sensiveis_usados": false,
+    "modelo": "Random Forest",
+    "hiperparametros": {
+      "max_depth": null,
+      "min_samples_leaf": 20,
+      "n_estimators": 500
+    },
+    "custo_fn": 3.0,
+    "custo_fp": 1.0,
+    "n_folds_cv": 5,
+    "modo_rapido": false
+  }
+}

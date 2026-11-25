@@ -1,2 +1,12 @@
 .DS_Store
 /backend/__pycache__
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.png
+# Gráficos do script de análise (entregáveis versionados)
+!resultados/*.png
+Revisao_Projeto_C318.pdf
+# Capturas de tela do site (plano B da apresentação, Passo 3)
+!docs/img/*.png

@@ -1,0 +1,5 @@
+configuracao,roc_auc_media,roc_auc_dp,pr_auc_media,pr_auc_dp,recall_media,recall_dp,precisao_media,precisao_dp,f1_media,f1_dp,tempo_ajuste_s,tempo_predicao_s
+"com SEX, AGE e MARRIAGE",0.785697,0.005328,0.557575,0.011872,0.61801,0.008394,0.487085,0.009469,0.544774,0.008637,12.864223,0.557138
+"sem SEX, AGE e MARRIAGE (mesmos hiperparâmetros)",0.784465,0.00546,0.555951,0.010219,0.620644,0.002807,0.483861,0.007128,0.543758,0.004622,11.739367,0.547325
+diferença pareada por fold (com - sem),0.001232,0.000883,0.001624,0.003014,,,,,0.001016,0.004217,,
+"sem SEX, AGE e MARRIAGE (GridSearchCV refeito: {'max_depth': None, 'min_samples_leaf': 20, 'n_estimators': 500})",0.784465,0.00546,0.555951,0.010219,0.620644,0.002807,0.483861,0.007128,0.543758,0.004622,19.664564,0.673286
