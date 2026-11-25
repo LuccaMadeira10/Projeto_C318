@@ -268,8 +268,18 @@
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
                 <div>
+                  <label for="BILL_AMT3" class="block text-[11px] text-slate-400 mb-1">Fatura há 3 meses (<code class="text-blue-400">BILL_AMT3</code>)</label>
+                  <input type="number" id="BILL_AMT3" placeholder="Estimado pela API se vazio"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                </div>
+                <div>
                   <label for="PAY_AMT2" class="block text-[11px] text-slate-400 mb-1">Valor Pago há 2 meses (<code class="text-blue-400">PAY_AMT2</code>)</label>
                   <input type="number" id="PAY_AMT2" min="0" placeholder="Estimado pela API se vazio"
+                    class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
+                </div>
+                <div>
+                  <label for="PAY_AMT3" class="block text-[11px] text-slate-400 mb-1">Valor Pago há 3 meses (<code class="text-blue-400">PAY_AMT3</code>)</label>
+                  <input type="number" id="PAY_AMT3" min="0" placeholder="Estimado pela API se vazio"
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
               </div>
@@ -607,6 +617,7 @@
   <script>
     let estadoAtual = 'desligada';
     let metricasAtuais = null;
+    let toastTimer = null;
     const AVISO_SENSIVEL = 'Não são usados pelo modelo; mantidos por compatibilidade da API.';
 
     // Cenários da apresentação (iguais a CENARIO_A e CENARIO_B de backend/tests/conftest.py)
@@ -641,6 +652,9 @@
         icon.className = 'w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0';
       }
       $('toastText').textContent = message;
+      // Erros ficam até o usuário fechar; sucesso/info somem sozinhos para não cobrir o resultado
+      clearTimeout(toastTimer);
+      if (type !== 'error') toastTimer = setTimeout(hideToast, 5000);
     }
 
     function hideToast() {
@@ -697,7 +711,11 @@
       let raiz = null;
       try {
         const r = await buscarJson('/');
-        if (r.ok && r.corpo && typeof r.corpo === 'object') raiz = r.corpo;
+        if (r.ok && r.corpo && typeof r.corpo === 'object') {
+          raiz = r.corpo;
+          // Lembra o último endereço que respondeu (ex.: API em porta diferente de 8000)
+          try { localStorage.setItem('apiUrl', getApiUrl()); } catch (e) {}
+        }
       } catch (e) { /* sem resposta: API desligada */ }
 
       let detalhe = null;
@@ -933,7 +951,7 @@
         PAY_AMT1: parseFloat($('PAY_AMT1').value)
       };
       // Campos avançados opcionais: só enviados quando preenchidos
-      [['PAY_2', parseInt], ['PAY_3', parseInt], ['BILL_AMT2', parseFloat], ['PAY_AMT2', parseFloat]].forEach(([campo, conv]) => {
+      [['PAY_2', parseInt], ['PAY_3', parseInt], ['BILL_AMT2', parseFloat], ['BILL_AMT3', parseFloat], ['PAY_AMT2', parseFloat], ['PAY_AMT3', parseFloat]].forEach(([campo, conv]) => {
         const v = $(campo).value;
         if (v !== '') payload[campo] = conv(v);
       });
@@ -1057,6 +1075,10 @@
     }
 
     window.onload = async function () {
+      try {
+        const salvo = localStorage.getItem('apiUrl');
+        if (salvo) $('inputApiUrl').value = salvo;
+      } catch (e) {}
       limparResultadosDoModelo();
       await verificarApi(false);
     };
