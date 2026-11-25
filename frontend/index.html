@@ -61,7 +61,8 @@
   <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
     <!-- Caixa de Mensagens / Notificações (Substitui qualquer alert nativo) -->
-    <div id="toastMessage" class="hidden rounded-xl p-4 border text-sm flex items-center justify-between gap-4 transition-all">
+    <!-- Fixo no rodapé da tela: visível mesmo com a página rolada até o botão de calcular -->
+    <div id="toastMessage" role="status" aria-live="polite" class="hidden fixed bottom-4 inset-x-4 z-40 max-w-3xl mx-auto backdrop-blur-md shadow-2xl rounded-xl p-4 border text-sm flex items-center justify-between gap-4 transition-all">
       <div class="flex items-center gap-3">
         <span id="toastIcon" class="w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0"></span>
         <span id="toastText" class="font-medium"></span>
@@ -81,7 +82,7 @@
             </span>
           </div>
           <p id="apiSubtext" class="text-xs text-slate-400 mt-0.5">
-            Conecta automaticamente ao <code class="text-blue-400">main.py</code> local ou usa inferência local calibrada se a API estiver desligada.
+            Conecta automaticamente ao <code class="text-blue-400">main.py</code>. Sem a API, o simulador mostra apenas uma estimativa aproximada (não é o modelo treinado).
           </p>
         </div>
       </div>
@@ -90,6 +91,7 @@
         <input
           type="text"
           id="inputApiUrl"
+          aria-label="Endereço da API FastAPI"
           value="http://127.0.0.1:8000"
           placeholder="http://127.0.0.1:8000"
           class="bg-slate-950 border border-slate-700 text-xs sm:text-sm rounded-xl px-3.5 py-2 text-slate-200 w-full md:w-64 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
@@ -243,22 +245,22 @@
               </button>
               <div id="advancedFields" class="hidden px-4 pb-4 pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label class="block text-[11px] text-slate-400 mb-1">Status há 2 meses (<code class="text-blue-400">PAY_2</code>)</label>
+                  <label for="PAY_2" class="block text-[11px] text-slate-400 mb-1">Status há 2 meses (<code class="text-blue-400">PAY_2</code>)</label>
                   <input type="number" id="PAY_2" min="-2" max="8" placeholder="Auto (baseado no PAY_0)"
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
                 <div>
-                  <label class="block text-[11px] text-slate-400 mb-1">Status há 3 meses (<code class="text-blue-400">PAY_3</code>)</label>
+                  <label for="PAY_3" class="block text-[11px] text-slate-400 mb-1">Status há 3 meses (<code class="text-blue-400">PAY_3</code>)</label>
                   <input type="number" id="PAY_3" min="-2" max="8" placeholder="Auto (baseado no PAY_0)"
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
                 <div>
-                  <label class="block text-[11px] text-slate-400 mb-1">Fatura há 2 meses (<code class="text-blue-400">BILL_AMT2</code>)</label>
+                  <label for="BILL_AMT2" class="block text-[11px] text-slate-400 mb-1">Fatura há 2 meses (<code class="text-blue-400">BILL_AMT2</code>)</label>
                   <input type="number" id="BILL_AMT2" placeholder="Auto (baseado na fatura 1)"
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
                 <div>
-                  <label class="block text-[11px] text-slate-400 mb-1">Valor Pago há 2 meses (<code class="text-blue-400">PAY_AMT2</code>)</label>
+                  <label for="PAY_AMT2" class="block text-[11px] text-slate-400 mb-1">Valor Pago há 2 meses (<code class="text-blue-400">PAY_AMT2</code>)</label>
                   <input type="number" id="PAY_AMT2" min="0" placeholder="Auto (baseado no pagamento 1)"
                     class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white">
                 </div>
@@ -592,8 +594,9 @@
         }
       });
 
-      if (tabName === 'metrics' && apiOnline) loadMetricsFromApi();
-      if (tabName === 'dataset' && apiOnline) loadDatasetCheck();
+      // Chamadas mesmo offline, para avisar que os valores exibidos não vêm da API
+      if (tabName === 'metrics') loadMetricsFromApi();
+      if (tabName === 'dataset') loadDatasetCheck();
     }
 
     function toggleAdvancedHistory() {
@@ -676,8 +679,8 @@
       return false;
     }
 
-    // Motor de inferência local calibrado com os pesos reais da Random Forest na base UCI
-    // (Usado automaticamente quando o usuário abre apenas o Front-end na Vercel ou no Preview sem rodar o uvicorn)
+    // Estimativa aproximada por regras escritas à mão (NÃO é o modelo treinado).
+    // Usada apenas quando a API está desligada, para a tela não ficar vazia; a interface avisa o usuário.
     function inferenciaCalibradaLocal(payload) {
       let score = 0.18;
 
@@ -740,18 +743,21 @@
     }
 
     async function executarInferencia() {
+      // Valida também quando chamado pelos presets/onload, que não passam pelo submit do form
+      if (!document.getElementById('predictForm').reportValidity()) return;
+
       const btn = document.getElementById('btnSubmitPredict');
       btn.disabled = true;
 
       const payload = {
-        LIMIT_BAL: parseFloat(document.getElementById('LIMIT_BAL').value) || 50000,
-        SEX: parseInt(document.getElementById('SEX').value) || 2,
-        EDUCATION: parseInt(document.getElementById('EDUCATION').value) || 2,
-        MARRIAGE: parseInt(document.getElementById('MARRIAGE').value) || 1,
-        AGE: parseInt(document.getElementById('AGE').value) || 35,
-        PAY_0: parseInt(document.getElementById('PAY_0').value) || 0,
-        BILL_AMT1: parseFloat(document.getElementById('BILL_AMT1').value) || 0,
-        PAY_AMT1: parseFloat(document.getElementById('PAY_AMT1').value) || 0
+        LIMIT_BAL: parseFloat(document.getElementById('LIMIT_BAL').value),
+        SEX: parseInt(document.getElementById('SEX').value),
+        EDUCATION: parseInt(document.getElementById('EDUCATION').value),
+        MARRIAGE: parseInt(document.getElementById('MARRIAGE').value),
+        AGE: parseInt(document.getElementById('AGE').value),
+        PAY_0: parseInt(document.getElementById('PAY_0').value),
+        BILL_AMT1: parseFloat(document.getElementById('BILL_AMT1').value),
+        PAY_AMT1: parseFloat(document.getElementById('PAY_AMT1').value)
       };
 
       // Campos avançados opcionais
@@ -765,7 +771,7 @@
       if (pamt2 !== "") payload.PAY_AMT2 = parseFloat(pamt2);
 
       let resultado = null;
-      let fonte = "Modo Demo (Navegador)";
+      let fonte = "Simulação (sem API)";
 
       if (apiOnline) {
         try {
@@ -777,9 +783,19 @@
           if (res.ok) {
             resultado = await res.json();
             fonte = "FastAPI (Scikit-Learn)";
+          } else {
+            // Erro da API (ex.: 422 de validação): mostra o motivo em vez de cair na simulação
+            const erro = await res.json().catch(() => ({}));
+            const detalhe = Array.isArray(erro.detail)
+              ? erro.detail.map(d => `${(d.loc || []).slice(-1)[0]}: ${d.msg}`).join('; ')
+              : (erro.detail || res.statusText);
+            showToast(`A API recusou a predição (HTTP ${res.status}): ${detalhe}`, 'error');
+            btn.disabled = false;
+            return;
           }
         } catch (err) {
-          apiOnline = false;
+          await testApiConnection(false);
+          showToast("Conexão com a API perdida. Exibindo apenas uma simulação aproximada.", 'error');
         }
       }
 
@@ -801,6 +817,9 @@
       const sourceTag = document.getElementById('inferenceSourceTag');
 
       sourceTag.textContent = fonte;
+      document.getElementById('riskSubtitle').textContent = apiOnline
+        ? "Classificação Estimada"
+        : "⚠ Simulação aproximada — conecte a API para usar o modelo";
 
       if (data.cor_indicador === 'green') {
         banner.className = "p-5 rounded-2xl border text-center transition-all bg-emerald-950/40 border-emerald-500/40";
@@ -837,12 +856,15 @@
 
     async function loadMetricsFromApi() {
       if (!apiOnline) {
-        showToast("Exibindo métricas oficiais do conjunto de teste da base UCI (6.000 amostras).", "info");
+        showToast("API desconectada: os valores exibidos são de referência, salvos no código, e não foram lidos do modelo.", "info");
         return;
       }
       try {
         const res = await fetch(`${getApiUrl()}/metrics`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          showToast(`Erro ao buscar /metrics (HTTP ${res.status}). Valores exibidos são de referência.`, "error");
+          return;
+        }
         const m = await res.json();
 
         document.getElementById('mAcc').textContent = (m.acuracia * 100).toFixed(1) + '%';
@@ -856,20 +878,20 @@
         document.getElementById('mcVP').textContent = m.matriz_confusao.VP;
         showToast("Métricas sincronizadas com o arquivo modelo_credito.joblib da API!", "success");
       } catch (e) {
-        // Mantém os valores padrão do teste
+        showToast("Não foi possível consultar /metrics. Valores exibidos são de referência.", "error");
       }
     }
 
     async function loadDatasetCheck() {
       const statusText = document.getElementById('datasetStatusText');
       if (!apiOnline) {
-        statusText.innerHTML = `<span class="text-emerald-400 font-semibold">✓ Estrutura UCI validada:</span> 30.000 clientes, 23 variáveis preditoras (<code class="text-slate-300">LIMIT_BAL</code> até <code class="text-slate-300">PAY_AMT6</code>) e variável alvo <code class="text-slate-300">default.payment.next.month</code> (22.12% positivos).`;
-        showToast("Esquema de 25 colunas da UCI validado!", "success");
+        statusText.innerHTML = `<span class="text-amber-400 font-semibold">API desconectada — arquivo não verificado.</span> Esperado: 30.000 clientes, 23 variáveis preditoras (<code class="text-slate-300">LIMIT_BAL</code> até <code class="text-slate-300">PAY_AMT6</code>) e variável alvo <code class="text-slate-300">default.payment.next.month</code> (~22,12% positivos).`;
         return;
       }
 
       try {
         const res = await fetch(`${getApiUrl()}/dataset-check`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (data.arquivo_encontrado) {
           statusText.innerHTML = `<span class="text-emerald-400 font-semibold">✓ Arquivo encontrado no servidor (${data.caminho}):</span> ${data.total_clientes_linhas.toLocaleString()} clientes, ${data.total_colunas} colunas e taxa de inadimplência de <strong>${data.taxa_inadimplencia_percentual}</strong>.`;
