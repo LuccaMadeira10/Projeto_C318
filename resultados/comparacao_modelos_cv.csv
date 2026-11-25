@@ -1,0 +1,6 @@
+modelo,roc_auc_media,roc_auc_dp,pr_auc_media,pr_auc_dp,recall_media,recall_dp,precisao_media,precisao_dp,f1_media,f1_dp,tempo_ajuste_s,tempo_predicao_s,melhores_parametros,vencedor
+Chute (referência),0.5,0.0,0.221208,9.3e-05,0.0,0.0,0.0,0.0,0.0,0.0,0.129509,0.0255,{},False
+Regressão Logística,0.727565,0.012659,0.504508,0.014416,0.650787,0.0181,0.38148,0.012024,0.480923,0.012682,0.151255,0.024209,{'C': 10.0},False
+KNN,0.759248,0.009421,0.516693,0.015959,0.261634,0.011304,0.664359,0.037373,0.375331,0.016341,0.044959,2.898875,"{'n_neighbors': 301, 'weights': 'uniform'}",False
+Árvore de Decisão,0.764504,0.00599,0.522412,0.010668,0.631571,0.023641,0.447204,0.018398,0.523294,0.01453,0.263755,0.050381,"{'max_depth': 8, 'min_samples_leaf': 500}",False
+Random Forest,0.785697,0.005328,0.557575,0.011872,0.61801,0.008394,0.487085,0.009469,0.544774,0.008637,22.17862,0.664971,"{'max_depth': None, 'min_samples_leaf': 20, 'n_estimators': 500}",True
