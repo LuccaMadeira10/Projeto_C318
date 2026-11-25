@@ -1,0 +1,16 @@
+# Deploy da API (FastAPI) no Render — plano gratuito.
+# Configuração usada no serviço (criado em New > Web Service > Public Git Repository).
+# Também serve como Blueprint (New > Blueprint) se o repositório for conectado ao Render pelo GitHub.
+services:
+  - type: web
+    name: credito-consciente-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      # Versão em que a API e os 207 testes foram verificados localmente
+      - key: PYTHON_VERSION
+        value: 3.13.2
