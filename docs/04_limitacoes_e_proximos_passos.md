@@ -1,6 +1,6 @@
 # 04. Limitações do Projeto, Evoluções Futuras e Referências
 
-[Anterior: 03. Resultados](03_resultados_negocio_e_tecnico.md) | [Voltar ao README](../README.md)
+[Anterior: 03. Resultados](03_resultados_tecnicos_e_negocio.md) | [Voltar ao README](../README.md)
 
 ---
 
@@ -41,4 +41,4 @@
 
 ---
 
-[Anterior: 03. Resultados](03_resultados_negocio_e_tecnico.md) | [Voltar ao README](../README.md)
+[Anterior: 03. Resultados](03_resultados_tecnicos_e_negocio.md) | [Voltar ao README](../README.md)
