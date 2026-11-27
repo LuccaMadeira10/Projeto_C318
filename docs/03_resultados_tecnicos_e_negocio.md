@@ -1,6 +1,6 @@
 # 03. Análise de Resultados (Visão Técnica e de Negócio)
 
-[Anterior: 02. Coleta e Modelagem](02_coleta_e_modelagem.md) | [Voltar ao README](../README.md) | [Próximo: 04. Limitações](04_limitacoes_e_proximos_passos.md)
+[Anterior: 02. Coleta e Modelagem](02_coleta_dados_e_modelagem.md) | [Voltar ao README](../README.md) | [Próximo: 04. Limitações](04_limitacoes_e_proximos_passos.md)
 
 ---
 
@@ -36,7 +36,7 @@ Todos os resultados finais foram obtidos sobre o **conjunto de teste isolado ($6
 3. **O escore retornado pelo modelo é uma probabilidade real?**  
    **Não.** As saídas do *Random Forest* não passaram por calibração de probabilidades. O valor numérico funciona como um **escore de ordenação de risco** (válido para ranquear clientes e aplicar o limiar de corte $0,50$), e não como percentual literal de chance de calote.
 4. **Confiabilidade e garantia de consistência:**  
-   Os **89 testes automatizados** (`backend/tests/`) validam que as métricas recalculadas sobre o teste batem exatamente com o artefato `backend/modelo_credito.joblib`, que a API nunca contradiz a classe prevista em relação à faixa de risco e que não há vazamento de dados do conjunto de teste para as escolhas de modelagem.
+   Os **207 testes automatizados** (`backend/tests/`) validam que as métricas recalculadas sobre o teste batem exatamente com o artefato `backend/modelo_credito.joblib`, que a API nunca contradiz a classe prevista em relação à faixa de risco e que não há vazamento de dados do conjunto de teste para as escolhas de modelagem.
 
 ---
 
@@ -62,4 +62,4 @@ Traduzindo a Matriz de Confusão ($6.000$ clientes avaliados) para a operação 
 
 ---
 
-[Anterior: 02. Coleta e Modelagem](02_coleta_e_modelagem.md) | [Voltar ao README](../README.md) | [Próximo: 04. Limitações](04_limitacoes_e_proximos_passos.md)
+[Anterior: 02. Coleta e Modelagem](02_coleta_dados_e_modelagem.md) | [Voltar ao README](../README.md) | [Próximo: 04. Limitações](04_limitacoes_e_proximos_passos.md)

@@ -1,6 +1,6 @@
 # 02. Coleta de Dados, Análise Exploratória e Modelagem
 
-[Anterior: 01. Contexto e Negócio](01_contexto_e_perguntas_negocio.md) | [Voltar ao README](../README.md) | [Próximo: 03. Resultados](03_resultados_negocio_e_tecnico.md)
+[Anterior: 01. Contexto e Negócio](01_contexto_e_perguntas_de_negocio.md) | [Voltar ao README](../README.md) | [Próximo: 03. Resultados](03_resultados_tecnicos_e_negocio.md)
 
 ---
 
@@ -142,4 +142,4 @@ No gráfico abaixo, o painel esquerdo mostra o *trade-off* clássico entre Recal
 
 ---
 
-[Anterior: 01. Contexto e Negócio](01_contexto_e_perguntas_negocio.md) | [Voltar ao README](../README.md) | [Próximo: 03. Resultados](03_resultados_negocio_e_tecnico.md)
+[Anterior: 01. Contexto e Negócio](01_contexto_e_perguntas_de_negocio.md) | [Voltar ao README](../README.md) | [Próximo: 03. Resultados](03_resultados_tecnicos_e_negocio.md)

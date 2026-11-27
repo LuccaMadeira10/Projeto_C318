@@ -1,6 +1,6 @@
 # 01. Contexto, Enquadramento e Perguntas de Negócio
 
-[Voltar ao README](../README.md) | [Próximo: 02. Coleta, Dados e Modelagem](02_coleta_e_modelagem.md)
+[Voltar ao README](../README.md) | [Próximo: 02. Coleta, Dados e Modelagem](02_coleta_dados_e_modelagem.md)
 
 ---
 
@@ -54,4 +54,4 @@ Abaixo estão as perguntas definidas na etapa inicial do projeto, respondidas co
 
 ---
 
-[Voltar ao README](../README.md) | [Próximo: 02. Coleta, Dados e Modelagem](02_coleta_e_modelagem.md)
+[Voltar ao README](../README.md) | [Próximo: 02. Coleta, Dados e Modelagem](02_coleta_dados_e_modelagem.md)
